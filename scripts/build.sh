@@ -161,6 +161,9 @@ CLOUDCFG_CONF=""
 LIMITS_CONF=""
 JOURNALD_CONF=""
 COREDUMP_CONF=""
+APT_CONF=""
+NEEDRESTART_CONF=""
+APT_TIMER_CONF=""
 cleanup() {
   rm -f "$WORK_IMG" \
     ${DOWNLOAD_TMP:+"$DOWNLOAD_TMP"} \
@@ -170,7 +173,10 @@ cleanup() {
     ${CLOUDCFG_CONF:+"$CLOUDCFG_CONF"} \
     ${LIMITS_CONF:+"$LIMITS_CONF"} \
     ${JOURNALD_CONF:+"$JOURNALD_CONF"} \
-    ${COREDUMP_CONF:+"$COREDUMP_CONF"}
+    ${COREDUMP_CONF:+"$COREDUMP_CONF"} \
+    ${APT_CONF:+"$APT_CONF"} \
+    ${NEEDRESTART_CONF:+"$NEEDRESTART_CONF"} \
+    ${APT_TIMER_CONF:+"$APT_TIMER_CONF"}
 }
 trap cleanup EXIT
 
@@ -271,6 +277,16 @@ SUDO
 customize=(
   --install "$GUEST_PACKAGES"
   --timezone Asia/Seoul
+  # The timezone option moves the /etc/localtime link and leaves the text file
+  # behind. systemd reads the link, so the clock looks right until something
+  # reconfigures tzdata from the file and the guest quietly goes back to UTC.
+  --run-command "[ -f /etc/timezone ] && printf 'Asia/Seoul\\n' > /etc/timezone; true"
+  # Korean is the interface language. Which tool generates a locale differs by
+  # family, so the image is asked what it has rather than told what it is; the
+  # Red Hat family carries the locale in a package the profile installs.
+  --run-command "if command -v locale-gen >/dev/null 2>&1; then sed -i 's/^# *\\(ko_KR.UTF-8 UTF-8\\)/\\1/' /etc/locale.gen; locale-gen >/dev/null; update-locale LANG=ko_KR.UTF-8; else printf 'LANG=ko_KR.UTF-8\\n' > /etc/locale.conf; fi; locale -a | grep -qi '^ko_KR' || { echo 'the ko_KR locale is not present in this image' >&2; exit 1; }"
+  # git prints a paragraph about the default branch name on every init otherwise.
+  --run-command "command -v git >/dev/null && git config --system init.defaultBranch main; true"
 )
 if [ -n "$SSHD_DROPIN_REMOVE" ]; then
   # Quoted for the guest shell: the value reaches a command line inside the image.
@@ -317,6 +333,36 @@ SystemMaxUse=200M
 SystemMaxFileSize=50M
 JOURNALD
 
+APT_CONF="$(mktemp)"
+cat > "$APT_CONF" <<'APTCONF'
+// Managed by the image builder.
+// A conffile prompt during an unattended run wedges dpkg, and every later apt
+// command then fails until somebody runs dpkg --configure by hand.
+Dpkg::Options { "--force-confdef"; "--force-confold"; };
+APT::Keep-Downloaded-Packages "false";
+APTCONF
+
+NEEDRESTART_CONF="$(mktemp)"
+cat > "$NEEDRESTART_CONF" <<'NRCONF'
+# Managed by the image builder.
+# Interactively this asks which services to restart, which is a full-screen
+# prompt on every apt install a student runs. Non-interactively it only lists
+# them, so an unattended upgrade restarts nothing and the fix does not take
+# effect until the next reboot.
+$nrconf{restart} = 'a';
+$nrconf{kernelhints} = -1;
+NRCONF
+
+APT_TIMER_CONF="$(mktemp)"
+cat > "$APT_TIMER_CONF" <<'TIMER'
+# Managed by the image builder.
+# A fresh guest has no record of a previous run, so the catch-up fires while the
+# user is still logging in for the first time and takes the dpkg lock with it.
+[Timer]
+OnBootSec=30min
+RandomizedDelaySec=60min
+TIMER
+
 COREDUMP_CONF="$(mktemp)"
 cat > "$COREDUMP_CONF" <<'COREDUMP'
 # Managed by the image builder. Dumps stay available for debugging, bounded so
@@ -348,6 +394,16 @@ customize+=(
   --upload "${LIMITS_CONF}:/etc/sysctl.d/99-pickle.conf"
   --upload "${JOURNALD_CONF}:/etc/systemd/journald.conf.d/99-pickle.conf"
   --upload "${COREDUMP_CONF}:/etc/systemd/coredump.conf.d/99-pickle.conf"
+  --upload "${APT_CONF}:/etc/apt/apt.conf.d/99-pickle"
+  --mkdir /etc/needrestart/conf.d
+  --upload "${NEEDRESTART_CONF}:/etc/needrestart/conf.d/99-pickle.conf"
+  --mkdir /etc/systemd/system/apt-daily.timer.d
+  --mkdir /etc/systemd/system/apt-daily-upgrade.timer.d
+  --upload "${APT_TIMER_CONF}:/etc/systemd/system/apt-daily.timer.d/99-pickle.conf"
+  --upload "${APT_TIMER_CONF}:/etc/systemd/system/apt-daily-upgrade.timer.d/99-pickle.conf"
+  # Upload keeps the mode of the local file and mktemp makes them private, while
+  # everything written here is ordinary configuration any process may read.
+  --run-command "chmod 644 /etc/sysctl.d/99-pickle.conf /etc/systemd/journald.conf.d/99-pickle.conf /etc/systemd/coredump.conf.d/99-pickle.conf /etc/apt/apt.conf.d/99-pickle /etc/needrestart/conf.d/99-pickle.conf /etc/systemd/system/apt-daily.timer.d/99-pickle.conf /etc/systemd/system/apt-daily-upgrade.timer.d/99-pickle.conf /etc/default/grub.d/99-pickle.cfg /etc/cloud/cloud.cfg.d/99-pickle-datasource.cfg"
   --run-command "update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg"
   # Machine identity. Clones must not share one: systemd derives the journal id
   # and the default DHCP client id from it, and a duplicate makes two VMs look

@@ -1,0 +1,17 @@
+{
+  "profile": "ubuntu-22.04",
+  "osFamily": "ubuntu",
+  "osVersion": "22.04",
+  "templateVmid": 1003,
+  "templateName": "ubuntu-2204-template",
+  "imageUrl": "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
+  "imageChecksum": "63dd101826bf6f45c74c4c2e0e0872cfeec4232cb1afcb8aeef8bc16f6c3b1e0",
+  "checksumUrl": "https://cloud-images.ubuntu.com/jammy/current/SHA256SUMS",
+  "checksumAlgorithm": "sha256",
+  "cpuType": "x86-64-v2-AES",
+  "ciUser": "ubuntu",
+  "sudoGroup": "sudo",
+  "guestPackages": "qemu-guest-agent,git,vim,nano,tmux,less,htop,ncdu,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute2,traceroute,netcat-openbsd,logrotate,ca-certificates,dnsutils",
+  "recipeRevision": "b9554a7",
+  "builtAt": "2026-07-29T14:58:33Z"
+}

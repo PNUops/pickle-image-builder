@@ -1,0 +1,17 @@
+{
+  "profile": "debian-13",
+  "osFamily": "debian",
+  "osVersion": "13",
+  "templateVmid": 1004,
+  "templateName": "debian-13-template",
+  "imageUrl": "https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2",
+  "imageChecksum": "1ff07be8406c4abcb75662a351b6124408c4a2795801037f8e4fe9ee27084ee2112bef92222f4bbeb9f7df8df1062971a9692f4c82f3da3c01fda6b1493906b9",
+  "checksumUrl": "https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS",
+  "checksumAlgorithm": "sha512",
+  "cpuType": "x86-64-v2-AES",
+  "ciUser": "debian",
+  "sudoGroup": "sudo",
+  "guestPackages": "qemu-guest-agent,git,vim,nano,tmux,less,htop,ncdu,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute2,traceroute,netcat-openbsd,logrotate,ca-certificates,dnsutils",
+  "recipeRevision": "535f956",
+  "builtAt": "2026-07-29T15:02:51Z"
+}

@@ -77,15 +77,26 @@ profile_dump() {
   ' _ "$PROFILE_PATH" "$REPO_ROOT/scripts/profile-vars.sh"
 }
 
-# The variable list is loaded after the profile inside the subshell, so a
-# profile cannot shrink it to hide a field it failed to set.
-declare -A PV=()
-while IFS='=' read -r key value; do
-  PV["$key"]="$value"
-done < <(profile_dump) || die "profile $PROFILE failed to load"
-
 # shellcheck source=scripts/profile-vars.sh
 . "$REPO_ROOT/scripts/profile-vars.sh"
+
+# The variable list is loaded after the profile inside the subshell too, so a
+# profile cannot shrink it to hide a field it failed to set.
+mapfile -t dump < <(profile_dump)
+# One line per declared field. A value carrying a newline would otherwise be
+# truncated at it and the remainder read as another field's assignment.
+declared=$(printf '%s %s' "$PROFILE_REQUIRED_VARS" "$PROFILE_OPTIONAL_VARS" | wc -w)
+[ "${#dump[@]}" -eq "$declared" ] || die "profile $PROFILE did not load cleanly (a value containing a newline?)"
+
+declare -A PV=()
+for line in "${dump[@]}"; do
+  key="${line%%=*}"
+  case " $PROFILE_REQUIRED_VARS $PROFILE_OPTIONAL_VARS " in
+    *" $key "*) PV["$key"]="${line#*=}" ;;
+    *) die "profile $PROFILE produced an unexpected field: $key" ;;
+  esac
+done
+
 for var in $PROFILE_REQUIRED_VARS; do
   [ -n "${PV[$var]:-}" ] || die "profile $PROFILE does not set $var"
 done
@@ -119,7 +130,11 @@ command -v "$SUM_CMD" >/dev/null || die "no such checksum tool: $SUM_CMD (CHECKS
 # One build at a time. Two builds of the same profile share the download path,
 # and a rebuild that destroys while another run is mid-import leaves both
 # without a template.
-exec 9>"${TMPDIR:-/tmp}/pickle-image-builder.lock"
+# A fixed path: taking it from the environment would give two operators with
+# different settings two locks and no serialisation at all.
+LOCK_DIR=/var/lock
+[ -d "$LOCK_DIR" ] || LOCK_DIR=/tmp
+exec 9>"$LOCK_DIR/pickle-image-builder.lock"
 flock -n 9 || die "another build is running"
 
 # ------------------------------------------------------------ existing vmid --

@@ -158,13 +158,19 @@ SSHD_CONF=""
 SUDOERS_CONF=""
 GRUB_CONF=""
 CLOUDCFG_CONF=""
+LIMITS_CONF=""
+JOURNALD_CONF=""
+COREDUMP_CONF=""
 cleanup() {
   rm -f "$WORK_IMG" \
     ${DOWNLOAD_TMP:+"$DOWNLOAD_TMP"} \
     ${SSHD_CONF:+"$SSHD_CONF"} \
     ${SUDOERS_CONF:+"$SUDOERS_CONF"} \
     ${GRUB_CONF:+"$GRUB_CONF"} \
-    ${CLOUDCFG_CONF:+"$CLOUDCFG_CONF"}
+    ${CLOUDCFG_CONF:+"$CLOUDCFG_CONF"} \
+    ${LIMITS_CONF:+"$LIMITS_CONF"} \
+    ${JOURNALD_CONF:+"$JOURNALD_CONF"} \
+    ${COREDUMP_CONF:+"$COREDUMP_CONF"}
 }
 trap cleanup EXIT
 
@@ -287,6 +293,39 @@ GRUB_TERMINAL="console serial"
 GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
 GRUB
 
+# Kernel and daemon limits the distribution leaves where a small guest cannot
+# live with them. Each value here was measured on the image rather than copied
+# from a hardening list: the inotify ceiling is derived from RAM and lands around
+# fifteen thousand, which an editor's remote session or a watching build exhausts
+# while reporting something that names neither; a panicked kernel sits dead
+# because the reboot timer is off; and the journal and core dumps are each
+# allowed a tenth of the filesystem, which on a ten gigabyte disk is the
+# student's disk filling up quietly.
+LIMITS_CONF="$(mktemp)"
+cat > "$LIMITS_CONF" <<'LIMITS'
+# Managed by the image builder.
+fs.inotify.max_user_watches = 262144
+fs.inotify.max_user_instances = 512
+kernel.panic = 10
+LIMITS
+
+JOURNALD_CONF="$(mktemp)"
+cat > "$JOURNALD_CONF" <<'JOURNALD'
+# Managed by the image builder.
+[Journal]
+SystemMaxUse=200M
+SystemMaxFileSize=50M
+JOURNALD
+
+COREDUMP_CONF="$(mktemp)"
+cat > "$COREDUMP_CONF" <<'COREDUMP'
+# Managed by the image builder. Dumps stay available for debugging, bounded so
+# that one runaway process cannot take the disk with it.
+[Coredump]
+MaxUse=200M
+ProcessSizeMax=256M
+COREDUMP
+
 # cloud-init probes every datasource it knows on each boot. Proxmox presents the
 # seed as NoCloud; ConfigDrive stays for the other cloud-init type Proxmox can be
 # told to use, and None keeps a missing seed from turning into a wait.
@@ -304,6 +343,11 @@ customize+=(
   --run-command "chmod 440 /etc/sudoers.d/zz-pickle && visudo -cf /etc/sudoers.d/zz-pickle"
   --upload "${GRUB_CONF}:/etc/default/grub.d/99-pickle.cfg"
   --upload "${CLOUDCFG_CONF}:/etc/cloud/cloud.cfg.d/99-pickle-datasource.cfg"
+  --mkdir /etc/systemd/journald.conf.d
+  --mkdir /etc/systemd/coredump.conf.d
+  --upload "${LIMITS_CONF}:/etc/sysctl.d/99-pickle.conf"
+  --upload "${JOURNALD_CONF}:/etc/systemd/journald.conf.d/99-pickle.conf"
+  --upload "${COREDUMP_CONF}:/etc/systemd/coredump.conf.d/99-pickle.conf"
   --run-command "update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg"
   # Machine identity. Clones must not share one: systemd derives the journal id
   # and the default DHCP client id from it, and a duplicate makes two VMs look

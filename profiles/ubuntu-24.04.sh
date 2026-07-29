@@ -33,7 +33,10 @@ CPU_TYPE=x86-64-v2-AES
 
 # The cloud image ships without the guest agent, and the platform needs it to
 # read the guest's SSH host keys and to set the account password.
-GUEST_PACKAGES=qemu-guest-agent
+# The guest agent is what the platform uses to read the VM's SSH host keys and
+# set its password; the rest is what somebody expects to find on a machine they
+# were given. Disk only, no resident cost.
+GUEST_PACKAGES="qemu-guest-agent,git,vim,nano,tmux,less,htop,ncdu,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute2,traceroute,netcat-openbsd,logrotate,ca-certificates,dnsutils"
 
 # Ubuntu cloud images ship PasswordAuthentication=no in this drop-in. Password
 # SSH is enabled in the guest because who may use it is decided at the SSH

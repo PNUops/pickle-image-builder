@@ -163,6 +163,9 @@ JOURNALD_CONF=""
 COREDUMP_CONF=""
 APT_CONF=""
 NEEDRESTART_CONF=""
+MANIFEST_BODY=""
+MOTD_SCRIPT=""
+ISSUE_TEXT=""
 APT_TIMER_CONF=""
 cleanup() {
   rm -f "$WORK_IMG" \
@@ -176,7 +179,10 @@ cleanup() {
     ${COREDUMP_CONF:+"$COREDUMP_CONF"} \
     ${APT_CONF:+"$APT_CONF"} \
     ${NEEDRESTART_CONF:+"$NEEDRESTART_CONF"} \
-    ${APT_TIMER_CONF:+"$APT_TIMER_CONF"}
+    ${APT_TIMER_CONF:+"$APT_TIMER_CONF"} \
+    ${MANIFEST_BODY:+"$MANIFEST_BODY"} \
+    ${MOTD_SCRIPT:+"$MOTD_SCRIPT"} \
+    ${ISSUE_TEXT:+"$ISSUE_TEXT"}
 }
 trap cleanup EXIT
 
@@ -333,6 +339,62 @@ SystemMaxUse=200M
 SystemMaxFileSize=50M
 JOURNALD
 
+# A template records nothing about its own inputs: the id and the name say
+# nothing about which upstream image went in or which revision of this recipe
+# shaped it, and the release channel the image came from moves. The same record
+# goes into the repository and into the guest, so a VM still running a year later
+# can answer the question without anyone correlating ids.
+MANIFEST_BODY="$(mktemp)"
+recipe_revision=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+if ! git -C "$REPO_ROOT" diff --quiet HEAD 2>/dev/null; then
+  recipe_revision="${recipe_revision}-modified"
+fi
+cat > "$MANIFEST_BODY" <<JSON
+{
+  "profile": "${PROFILE}",
+  "osFamily": "${OS_FAMILY}",
+  "osVersion": "${OS_VERSION}",
+  "templateVmid": ${TEMPLATE_VMID},
+  "templateName": "${TEMPLATE_NAME}",
+  "imageUrl": "${IMAGE_URL}",
+  "imageChecksum": "${expected}",
+  "checksumUrl": "${CHECKSUM_URL}",
+  "checksumAlgorithm": "${CHECKSUM_ALGO}",
+  "cpuType": "${CPU_TYPE}",
+  "ciUser": "${CIUSER}",
+  "sudoGroup": "${SUDO_GROUP}",
+  "guestPackages": "${GUEST_PACKAGES}",
+  "recipeRevision": "${recipe_revision}",
+  "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+JSON
+
+# What a student sees on the way in. The message of the day is the only channel
+# that reaches every guest without the platform pushing anything, and it cannot
+# be changed on a VM that already exists, so it says the few things somebody
+# logging in for the first time needs and nothing that will go stale.
+MOTD_SCRIPT="$(mktemp)"
+cat > "$MOTD_SCRIPT" <<'MOTD'
+#!/bin/sh
+# Managed by the image builder. The distribution's own header already names the
+# release, so this starts from what the platform has to say.
+printf '\n  부산대학교 클라우드 플랫폼에서 만든 가상 머신입니다.\n\n'
+printf '  sudo 는 이 VM 의 비밀번호를 묻습니다. 콘솔에서 확인할 수 있습니다.\n'
+printf '  영어 메시지로 보려면 명령 앞에 LC_ALL=C 를 붙이세요.\n'
+[ -f /var/run/reboot-required ] &&
+  printf '  업데이트 적용을 위해 재부팅이 필요합니다.\n'
+df -P / 2>/dev/null | awk 'NR==2 && int($5) > 90 {
+  printf "  디스크가 %s 찼습니다. 정리가 필요합니다.\n", $5 }'
+printf '\n'
+MOTD
+
+ISSUE_TEXT="$(mktemp)"
+cat > "$ISSUE_TEXT" <<'ISSUE'
+부산대학교 클라우드 플랫폼 가상 머신입니다.
+접속 기록이 남으며, 하이퍼바이저 운영자는 이 VM 의 디스크와 콘솔에 접근할 수 있습니다.
+
+ISSUE
+
 APT_CONF="$(mktemp)"
 cat > "$APT_CONF" <<'APTCONF'
 // Managed by the image builder.
@@ -395,6 +457,17 @@ customize+=(
   --upload "${JOURNALD_CONF}:/etc/systemd/journald.conf.d/99-pickle.conf"
   --upload "${COREDUMP_CONF}:/etc/systemd/coredump.conf.d/99-pickle.conf"
   --upload "${APT_CONF}:/etc/apt/apt.conf.d/99-pickle"
+  --mkdir /etc/pickle
+  --upload "${MANIFEST_BODY}:/etc/pickle/image.json"
+  --mkdir /etc/update-motd.d
+  --upload "${MOTD_SCRIPT}:/etc/update-motd.d/00-pickle"
+  --upload "${ISSUE_TEXT}:/etc/issue"
+  --upload "${ISSUE_TEXT}:/etc/issue.net"
+  # The distribution's own message of the day fetches news from the vendor on a
+  # timer, advertises a support subscription, and recomputes a system summary on
+  # every single login. None of that belongs on a student's VM.
+  --run-command "if [ -d /etc/update-motd.d ]; then chmod -x /etc/update-motd.d/*motd-news* /etc/update-motd.d/*landscape* /etc/update-motd.d/*esm* /etc/update-motd.d/*contract* /etc/update-motd.d/*release-upgrade* 2>/dev/null; fi; true"
+  --run-command "chmod 755 /etc/update-motd.d/00-pickle; chmod 644 /etc/issue /etc/issue.net /etc/pickle/image.json"
   --mkdir /etc/needrestart/conf.d
   --upload "${NEEDRESTART_CONF}:/etc/needrestart/conf.d/99-pickle.conf"
   --mkdir /etc/systemd/system/apt-daily.timer.d
@@ -484,37 +557,9 @@ qm set "$TEMPLATE_VMID" --boot order=scsi0
 qm template "$TEMPLATE_VMID"
 
 # ---------------------------------------------------------------- provenance --
-# A template is a build artifact with no record of its own inputs: the id and the
-# name say nothing about which upstream image went in or which revision of this
-# recipe shaped it. The manifest is written next to the recipe and committed, so
-# a template that has been running for a year can still be traced to the bytes it
-# came from. One file per template id: a rebuild replaces the record for that id,
-# which is what "what is on that id now" should mean.
 mkdir -p "$REPO_ROOT/manifests"
 manifest="$REPO_ROOT/manifests/${PROFILE}-${TEMPLATE_VMID}.json"
-recipe_revision=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
-if ! git -C "$REPO_ROOT" diff --quiet HEAD 2>/dev/null; then
-  recipe_revision="${recipe_revision}-modified"
-fi
-cat > "$manifest" <<JSON
-{
-  "profile": "${PROFILE}",
-  "osFamily": "${OS_FAMILY}",
-  "osVersion": "${OS_VERSION}",
-  "templateVmid": ${TEMPLATE_VMID},
-  "templateName": "${TEMPLATE_NAME}",
-  "imageUrl": "${IMAGE_URL}",
-  "imageChecksum": "${expected}",
-  "checksumUrl": "${CHECKSUM_URL}",
-  "checksumAlgorithm": "${CHECKSUM_ALGO}",
-  "cpuType": "${CPU_TYPE}",
-  "ciUser": "${CIUSER}",
-  "sudoGroup": "${SUDO_GROUP}",
-  "guestPackages": "${GUEST_PACKAGES}",
-  "recipeRevision": "${recipe_revision}",
-  "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-JSON
+cp "$MANIFEST_BODY" "$manifest"
 echo "wrote manifests/${PROFILE}-${TEMPLATE_VMID}.json"
 
 echo "template $TEMPLATE_VMID (${TEMPLATE_NAME}, ${OS_FAMILY} ${OS_VERSION}) ready"

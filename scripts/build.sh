@@ -181,11 +181,15 @@ WORK_IMG="${IMAGE_CACHE_DIR}/pickle-${TEMPLATE_VMID}-${IMAGE_FILE}"
 DOWNLOAD_TMP=""
 SSHD_CONF=""
 SUDOERS_CONF=""
+GRUB_CONF=""
+CLOUDCFG_CONF=""
 cleanup() {
   rm -f "$WORK_IMG" \
     ${DOWNLOAD_TMP:+"$DOWNLOAD_TMP"} \
     ${SSHD_CONF:+"$SSHD_CONF"} \
-    ${SUDOERS_CONF:+"$SUDOERS_CONF"}
+    ${SUDOERS_CONF:+"$SUDOERS_CONF"} \
+    ${GRUB_CONF:+"$GRUB_CONF"} \
+    ${CLOUDCFG_CONF:+"$CLOUDCFG_CONF"}
 }
 trap cleanup EXIT
 
@@ -269,12 +273,48 @@ if [ -n "$SSHD_DROPIN_REMOVE" ]; then
   # Quoted for the guest shell: the value reaches a command line inside the image.
   customize+=(--run-command "rm -f $(printf '%q' "$SSHD_DROPIN_REMOVE")")
 fi
+# GRUB. The cloud image hides the menu entirely (timeout 0), and Proxmox runs
+# these guests with no VGA device, so a VM whose sshd does not come up has no way
+# in at all: the web terminal is an SSH client too. A short menu on the serial
+# console is the only path left for a guest that broke its own fstab or sudoers,
+# and it costs three seconds per boot. The kernel already logs to both consoles;
+# what is missing is GRUB itself talking to the serial line rather than to a
+# screen that does not exist.
+GRUB_CONF="$(mktemp)"
+cat > "$GRUB_CONF" <<'GRUB'
+# Managed by the image builder. Sorted after the cloud image's own settings.
+GRUB_TIMEOUT=3
+GRUB_TIMEOUT_STYLE=menu
+GRUB_RECORDFAIL_TIMEOUT=3
+GRUB_TERMINAL="console serial"
+GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"
+GRUB
+
+# cloud-init probes every datasource it knows on each boot. Proxmox presents the
+# seed as NoCloud; ConfigDrive stays for the other cloud-init type Proxmox can be
+# told to use, and None keeps a missing seed from turning into a wait.
+CLOUDCFG_CONF="$(mktemp)"
+cat > "$CLOUDCFG_CONF" <<'CLOUDCFG'
+# Managed by the image builder.
+datasource_list: [ NoCloud, ConfigDrive, None ]
+CLOUDCFG
+
 customize+=(
   --upload "${SSHD_CONF}:/etc/ssh/sshd_config.d/01-pickle.conf"
   --run-command "chmod 644 /etc/ssh/sshd_config.d/01-pickle.conf"
   --upload "${SUDOERS_CONF}:/etc/sudoers.d/zz-pickle"
   --run-command "chmod 440 /etc/sudoers.d/zz-pickle && visudo -cf /etc/sudoers.d/zz-pickle"
-  --truncate /etc/machine-id
+  --upload "${GRUB_CONF}:/etc/default/grub.d/99-pickle.cfg"
+  --upload "${CLOUDCFG_CONF}:/etc/cloud/cloud.cfg.d/99-pickle-datasource.cfg"
+  --run-command "update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg"
+  # Machine identity. Clones must not share one: systemd derives the journal id
+  # and the default DHCP client id from it, and a duplicate makes two VMs look
+  # like one wherever those are used. The systemd contract for an image is the
+  # literal word rather than an empty file, and the D-Bus copy is a separate
+  # file on these distributions rather than a link to the first.
+  --run-command "printf 'uninitialized\\n' > /etc/machine-id &&
+                 rm -f /var/lib/dbus/machine-id &&
+                 rm -rf /var/lib/cloud/instance /var/lib/cloud/instances /var/lib/cloud/data"
 )
 virt-customize -a "$WORK_IMG" "${customize[@]}"
 
@@ -317,6 +357,14 @@ qm create "$TEMPLATE_VMID" \
   --serial0 socket \
   --vga serial0
 
+# Proxmox tells cloud-init to run a full package upgrade on first boot. Measured
+# on this image it was 19.5s of a 36s boot, and for that whole stretch the guest
+# agent does not answer, which is exactly when the platform is polling it to
+# collect the guest's host keys. The upgrade is also the largest memory spike a
+# 1 GiB guest sees. Unattended upgrades are enabled inside the image, so the
+# fixes still land; they land on the guest's own schedule instead of across
+# provisioning.
+qm set "$TEMPLATE_VMID" --ciupgrade 0
 qm set "$TEMPLATE_VMID" --scsi0 "${STORAGE}:0,import-from=${WORK_IMG},discard=on"
 qm set "$TEMPLATE_VMID" --ide2 "${STORAGE}:cloudinit"
 qm set "$TEMPLATE_VMID" --boot order=scsi0

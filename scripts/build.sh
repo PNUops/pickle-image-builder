@@ -91,6 +91,7 @@ CPU_TYPE="${PV[CPU_TYPE]}"
 SSHD_DROPIN_REMOVE="${PV[SSHD_DROPIN_REMOVE]:-}"
 CHECKSUM_FORMAT="${PV[CHECKSUM_FORMAT]:-gnu}"
 GUEST_COMMAND="${PV[GUEST_COMMAND]:-}"
+TMP_ON_DISK="${PV[TMP_ON_DISK]:-no}"
 TEMPLATE_NAME="${PV[TEMPLATE_NAME]}"
 
 # virt-customize takes one comma-separated list. A profile written with spaces
@@ -539,6 +540,27 @@ customize+=(
                  rm -f /var/lib/dbus/machine-id &&
                  rm -rf /var/lib/cloud/instance /var/lib/cloud/instances /var/lib/cloud/data"
 )
+
+# Where /tmp lives. A distribution that mounts it as a tmpfs sizes it from RAM,
+# and on the small guests this platform hands out that budget is shared with
+# everything the student is running: an archive extracted into /tmp is spent
+# memory, the process is killed for it, and df reports the disk almost empty the
+# whole time. Nothing in that failure names /tmp, so the guest is given the
+# ordinary directory instead and the disk quota becomes the only limit.
+#
+# Masking is the systemd way to say a mount unit must not run. Written as the
+# link rather than through systemctl because the image is not booted here and
+# systemctl treats an offline tree as a special case. The unit is required to
+# exist: a profile asking for this on an image that never had the tmpfs is a
+# stale assumption, and finding out at build time beats finding out never.
+if [ "$TMP_ON_DISK" = yes ]; then
+  customize+=(
+    --run-command "test -e /usr/lib/systemd/system/tmp.mount || test -e /lib/systemd/system/tmp.mount ||
+                   { echo 'TMP_ON_DISK is set but this image has no tmp.mount unit' >&2; exit 1; }
+                   ln -sf /dev/null /etc/systemd/system/tmp.mount"
+  )
+fi
+
 virt-customize -a "$WORK_IMG" "${customize[@]}"
 
 # A separate pass so that the host-key removal is the last thing to touch the

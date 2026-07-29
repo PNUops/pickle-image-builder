@@ -1,0 +1,15 @@
+# Downloaded cloud images and working copies (cached outside the repo; this is a
+# guard against a stray download landing in a commit)
+*.img
+*.qcow2
+*.raw
+SHA256SUMS
+SHA512SUMS
+CHECKSUM
+
+# Local secrets (never committed)
+/.env
+*.pem
+*.key
+id_rsa*
+id_ed25519*

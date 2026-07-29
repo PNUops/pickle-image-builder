@@ -32,6 +32,8 @@ PROFILE_RESERVED_VARS="TEMPLATE_VMID REBUILD PROFILE PROFILE_PATH REPO_ROOT STOR
 # that exits early, or that redefines printf, prints fewer lines and would
 # otherwise read as complete.
 profile_load() {
+  local self
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
   # shellcheck disable=SC2016  # the body runs in the child, not here
   env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash --noprofile --norc -c '
     set -euo pipefail
@@ -40,7 +42,48 @@ profile_load() {
     for v in $PROFILE_REQUIRED_VARS $PROFILE_OPTIONAL_VARS; do
       command printf "%s=%s\n" "$v" "${!v-}"
     done
-  ' _ "$1" "$2"
+  ' _ "$1" "$self"
+}
+
+# Checks the fields a profile produced. Prints one line per problem and returns
+# non-zero if there was any. Both the builder and the gate call this, so that a
+# green check means the build will accept the same profile: a rule that lives in
+# only one of them is a rule the other stops enforcing.
+profile_validate() {
+  local -n _fields="$1"
+  local rc=0 name value line
+  local -A got=()
+  for line in "${_fields[@]}"; do got["${line%%=*}"]="${line#*=}"; done
+
+  for name in $PROFILE_REQUIRED_VARS; do
+    if [ -z "${got[$name]+set}" ]; then
+      echo "does not set $name"; rc=1
+    elif [ -z "${got[$name]}" ]; then
+      echo "leaves $name empty"; rc=1
+    fi
+  done
+
+  # Every value reaches a generated file. The manifest is JSON, where a quote or
+  # a backslash produces a file that parses as nothing and a control character is
+  # illegal outright; the rest land in guest configuration or a guest command.
+  for name in $PROFILE_REQUIRED_VARS $PROFILE_OPTIONAL_VARS; do
+    value="${got[$name]-}"
+    case "$value" in
+      *'"'*|*\\*) echo "$name contains a quote or backslash"; rc=1 ;;
+      *[!\ -~]*)   echo "$name contains a control or non-ASCII character"; rc=1 ;;
+    esac
+  done
+
+  # The algorithm names a command, so it stays a bare word: anything else lets a
+  # profile field decide which binary hashes the image.
+  case "${got[CHECKSUM_ALGO]-}" in
+    ''|*[!a-z0-9]*) echo "CHECKSUM_ALGO must be a bare name such as sha256"; rc=1 ;;
+  esac
+  case "${got[CHECKSUM_FORMAT]-gnu}" in
+    ''|gnu|bsd) : ;;
+    *) echo "CHECKSUM_FORMAT must be gnu or bsd"; rc=1 ;;
+  esac
+  return "$rc"
 }
 
 # The number of lines a healthy profile_load prints.

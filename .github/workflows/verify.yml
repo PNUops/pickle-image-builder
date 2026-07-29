@@ -5,8 +5,9 @@ on:
   push:
     branches: [main]
 
-# The job runs shell that arrives with the pull request: profiles are sourced
-# by the gate. Read access is all it needs.
+# The gate sources the profiles in the branch, so a pull request runs its own
+# shell on the runner. Narrowing the token does not change that; it limits what
+# the run can reach if it is abused.
 permissions:
   contents: read
 

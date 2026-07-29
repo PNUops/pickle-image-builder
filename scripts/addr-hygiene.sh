@@ -47,10 +47,18 @@ addr_hygiene_check() {
 
   # A file grep cannot read produces silence rather than a warning, which is the
   # same shape as a clean scan. Refuse it instead.
-  local binary textlist
+  local binary textlist f
+  local -a readable=()
+  # An empty file has no line to match, so it never appears in a grep listing;
+  # counting it as unreadable would accuse a .gitkeep of being a binary.
+  for f in "${files[@]}"; do
+    [ -s "$f" ] && readable+=("$f")
+  done
   textlist="$(mktemp)"
-  printf '%s\0' "${files[@]}" | xargs -0 grep -lI '' 2>/dev/null | sort > "$textlist"
-  binary=$(printf '%s\n' "${files[@]}" | sort | comm -23 - "$textlist")
+  if [ "${#readable[@]}" -gt 0 ]; then
+    printf '%s\0' "${readable[@]}" | xargs -0 grep -lI '' 2>/dev/null | sort > "$textlist" || true
+  fi
+  binary=$(printf '%s\n' "${readable[@]:-}" | sort | comm -23 - "$textlist" | grep -v '^$' || true)
   rm -f "$textlist"
   if [ -n "$binary" ]; then
     echo "addr-hygiene: file the scan cannot read:" >&2
@@ -110,6 +118,22 @@ CLEAN
   git -C "$tmp" add -A >/dev/null 2>&1
   if ! ( cd "$tmp" && . scripts/addr-hygiene.sh && addr_hygiene_check ) >/dev/null 2>&1; then
     echo "addr-hygiene selftest: false positive on legitimate content" >&2
+    rc=1
+  fi
+
+  # The unreadable-file path, which the check added and nothing exercised.
+  printf 'clean line\n' > "$tmp/sample.txt"
+  printf '\000\001\002binary\000' > "$tmp/blob.bin"
+  : > "$tmp/empty-file"
+  git -C "$tmp" add -A >/dev/null 2>&1
+  if ( cd "$tmp" && . scripts/addr-hygiene.sh && addr_hygiene_check ) >/dev/null 2>&1; then
+    echo "addr-hygiene selftest: a file the scan cannot read was not reported" >&2
+    rc=1
+  fi
+  rm -f "$tmp/blob.bin"
+  git -C "$tmp" add -A >/dev/null 2>&1
+  if ! ( cd "$tmp" && . scripts/addr-hygiene.sh && addr_hygiene_check ) >/dev/null 2>&1; then
+    echo "addr-hygiene selftest: an empty file was reported as unreadable" >&2
     rc=1
   fi
 

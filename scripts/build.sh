@@ -122,6 +122,11 @@ IMAGE_CACHE_DIR="${IMAGE_CACHE_DIR:-/var/lib/vz/template/iso}"
 IMAGE_FILE="${IMAGE_URL##*/}"
 [ -n "$IMAGE_FILE" ] || die "IMAGE_URL does not end in a file name: $IMAGE_URL"
 IMAGE_PATH="${IMAGE_CACHE_DIR}/${IMAGE_FILE}"
+# The algorithm names a command, so it stays a bare word: anything else would let
+# a profile field decide which binary hashes the image.
+case "$CHECKSUM_ALGO" in
+  *[!a-z0-9]*|'') die "CHECKSUM_ALGO must be a bare name such as sha256: $CHECKSUM_ALGO" ;;
+esac
 SUM_CMD="${CHECKSUM_ALGO}sum"
 
 command -v qm >/dev/null || die "qm not found; run this on a Proxmox node"

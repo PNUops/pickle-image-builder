@@ -13,11 +13,19 @@ TEMPLATE_NAME=ubuntu-2404-template
 IMAGE_URL=https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
 CHECKSUM_URL=https://cloud-images.ubuntu.com/noble/current/SHA256SUMS
 CHECKSUM_ALGO=sha256
+# gnu: "<hash>  <name>". Red Hat family images publish "<ALGO> (<name>) = <hash>".
+CHECKSUM_FORMAT=gnu
 
 # Guest admin account. Must match the cloud image's own default user so that
 # cloud-init and the sudoers drop-in name the same account. The platform sends
 # the same name as the cloud-init user, so the template alone does not decide it.
 CIUSER=ubuntu
+
+# The group that grants sudo. The sudo rule targets the group rather than the
+# account so that it still applies if the platform ever hands cloud-init a
+# different user name; a rule naming an absent account would leave cloud-init's
+# passwordless rule as the last match.
+SUDO_GROUP=sudo
 
 # Broadwell-era baseline. Distributions that raise their ISA floor need a higher
 # model here or they will not boot.

@@ -1,0 +1,17 @@
+{
+  "profile": "ubuntu-24.04",
+  "osFamily": "ubuntu",
+  "osVersion": "24.04",
+  "templateVmid": 1001,
+  "templateName": "ubuntu-2404-template",
+  "imageUrl": "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img",
+  "imageChecksum": "d1940f7d69d343355e183dff1e08a59852d32e7309baa7a4bad8365b11b005ac",
+  "checksumUrl": "https://cloud-images.ubuntu.com/noble/current/SHA256SUMS",
+  "checksumAlgorithm": "sha256",
+  "cpuType": "x86-64-v2-AES",
+  "ciUser": "ubuntu",
+  "sudoGroup": "sudo",
+  "guestPackages": "qemu-guest-agent,git,vim,nano,tmux,less,htop,ncdu,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute2,traceroute,netcat-openbsd,logrotate,ca-certificates,dnsutils",
+  "recipeRevision": "b9554a7",
+  "builtAt": "2026-07-29T14:55:59Z"
+}

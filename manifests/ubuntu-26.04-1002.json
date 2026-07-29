@@ -1,0 +1,17 @@
+{
+  "profile": "ubuntu-26.04",
+  "osFamily": "ubuntu",
+  "osVersion": "26.04",
+  "templateVmid": 1002,
+  "templateName": "ubuntu-2604-template",
+  "imageUrl": "https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64.img",
+  "imageChecksum": "117816726abbdefc5ef3e38902e81a76f1c76c3610e709999d0885f9d5d9b477",
+  "checksumUrl": "https://cloud-images.ubuntu.com/resolute/current/SHA256SUMS",
+  "checksumAlgorithm": "sha256",
+  "cpuType": "x86-64-v2-AES",
+  "ciUser": "ubuntu",
+  "sudoGroup": "sudo",
+  "guestPackages": "qemu-guest-agent,git,vim,nano,tmux,less,htop,ncdu,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute2,traceroute,netcat-openbsd,logrotate,ca-certificates,dnsutils",
+  "recipeRevision": "b9554a7",
+  "builtAt": "2026-07-29T14:57:18Z"
+}

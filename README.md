@@ -127,6 +127,7 @@ scripts/build.sh <프로파일> <vmid> --rebuild   # 기존 VMID를 지우고 �
 | `SSHD_DROPIN_REMOVE` | (선택) 배포판이 넣어 둔 sshd 드롭인 중 지울 것 |
 | `CHECKSUM_FORMAT` | (선택) `gnu`(기본) 또는 `bsd`. Red Hat 계열은 `SHA256 (파일) = 해시` 형식입니다 |
 | `TMP_ON_DISK` | (선택) `yes`면 `/tmp`를 tmpfs로 올리는 배포판에서 그 유닛을 막아 디스크에 둡니다. 기본은 `no`, 즉 배포판 기본값 그대로. 빌드가 그 유닛이 실제로 있는지 확인합니다 |
+| `GUEST_COMMAND` | (선택) 공통 설정을 다 넣은 뒤 게스트 안에서 한 번 실행할 명령. 배포판 하나에만 필요한 처리를 빌더 본문에 조건문으로 넣지 않기 위한 자리입니다 |
 
 ## 전체 아키텍처
 

@@ -86,7 +86,7 @@ mapfile -t dump < <(profile_dump)
 # One line per declared field. A value carrying a newline would otherwise be
 # truncated at it and the remainder read as another field's assignment.
 declared=$(printf '%s %s' "$PROFILE_REQUIRED_VARS" "$PROFILE_OPTIONAL_VARS" | wc -w)
-[ "${#dump[@]}" -eq "$declared" ] || die "profile $PROFILE did not load cleanly (a value containing a newline?)"
+[ "${#dump[@]}" -eq "$declared" ] || die "profile $PROFILE did not load cleanly (a syntax error, or a value containing a newline)"
 
 declare -A PV=()
 for line in "${dump[@]}"; do
@@ -115,6 +115,15 @@ TEMPLATE_NAME="${TEMPLATE_NAME:-${PV[TEMPLATE_NAME]}}"
 # would otherwise become a single package name that no distribution has.
 GUEST_PACKAGES=$(printf '%s' "${PV[GUEST_PACKAGES]}" | tr -s '[:space:],' ',' | sed 's/^,//; s/,$//')
 [ -n "$GUEST_PACKAGES" ] || die "profile $PROFILE has an empty GUEST_PACKAGES"
+
+# These values are also written verbatim into the build manifest, which is JSON.
+# A quote or a backslash would produce a file that parses as nothing at all, and
+# the failure would surface long after the build reported success.
+for var in OS_FAMILY OS_VERSION TEMPLATE_NAME IMAGE_URL CHECKSUM_ALGO GUEST_PACKAGES; do
+  case "${!var}" in
+    *'"'*|*\\*) die "profile $PROFILE has a quote or backslash in $var" ;;
+  esac
+done
 
 STORAGE="${STORAGE:-local-lvm}"
 BRIDGE="${BRIDGE:-vmbr2}"
@@ -254,5 +263,35 @@ qm set "$TEMPLATE_VMID" --scsi0 "${STORAGE}:0,import-from=${WORK_IMG},discard=on
 qm set "$TEMPLATE_VMID" --ide2 "${STORAGE}:cloudinit"
 qm set "$TEMPLATE_VMID" --boot order=scsi0
 qm template "$TEMPLATE_VMID"
+
+# ---------------------------------------------------------------- provenance --
+# A template is a build artifact with no record of its own inputs: the id and the
+# name say nothing about which upstream image went in or which revision of this
+# recipe shaped it. The manifest is written next to the recipe and committed, so
+# a template that has been running for a year can still be traced to the bytes it
+# came from. One file per template id: a rebuild replaces the record for that id,
+# which is what "what is on that id now" should mean.
+mkdir -p "$REPO_ROOT/manifests"
+manifest="$REPO_ROOT/manifests/${PROFILE}-${TEMPLATE_VMID}.json"
+recipe_revision=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+if ! git -C "$REPO_ROOT" diff --quiet HEAD 2>/dev/null; then
+  recipe_revision="${recipe_revision}-modified"
+fi
+cat > "$manifest" <<JSON
+{
+  "profile": "${PROFILE}",
+  "osFamily": "${OS_FAMILY}",
+  "osVersion": "${OS_VERSION}",
+  "templateVmid": ${TEMPLATE_VMID},
+  "templateName": "${TEMPLATE_NAME}",
+  "imageUrl": "${IMAGE_URL}",
+  "imageChecksum": "${expected}",
+  "checksumAlgorithm": "${CHECKSUM_ALGO}",
+  "guestPackages": "${GUEST_PACKAGES}",
+  "recipeRevision": "${recipe_revision}",
+  "builtAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+JSON
+echo "wrote manifests/${PROFILE}-${TEMPLATE_VMID}.json"
 
 echo "template $TEMPLATE_VMID (${TEMPLATE_NAME}, ${OS_FAMILY} ${OS_VERSION}) ready"

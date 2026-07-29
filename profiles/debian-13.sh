@@ -10,10 +10,15 @@ OS_FAMILY=debian
 OS_VERSION=13
 TEMPLATE_NAME=debian-13-template
 
-# The generic variant, not genericcloud. The cloud kernel that genericcloud
-# carries is built without the ATA and AHCI drivers, so it never sees the
-# cloud-init seed that Proxmox attaches as an IDE CD-ROM: the guest boots, finds
-# no datasource, and comes up with no user, no password and no SSH key.
+# The generic variant, not genericcloud. This is a margin, not a requirement:
+# genericcloud was checked and its cloud kernel does carry ata_piix, ahci and
+# the CD-ROM and ISO9660 modules, so it would see the cloud-init seed Proxmox
+# attaches as an IDE CD-ROM. What genericcloud drops is drivers for physical
+# hardware, and generic is the superset of the two. The seed is the one thing
+# whose absence is silent -- the guest boots and comes up with no user, no
+# password and no SSH key -- so the variant that cannot run short of drivers is
+# worth about 90 MB of download here. generic is also what these templates were
+# built and verified with.
 IMAGE_URL=https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
 CHECKSUM_URL=https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
 CHECKSUM_ALGO=sha512

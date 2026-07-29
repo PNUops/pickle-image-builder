@@ -18,7 +18,6 @@ environment overrides:
   STORAGE            Proxmox storage for the disk    (default local-lvm)
   BRIDGE             bridge for net0                 (default vmbr2)
   IMAGE_CACHE_DIR    upstream image cache            (default /var/cache/pickle-image-builder)
-  TEMPLATE_NAME      overrides the profile's name
 
 available profiles: $(for p in "$REPO_ROOT"/profiles/*.sh; do [ -e "$p" ] && basename "$p" .sh; done | paste -sd' ' -)
 EOF
@@ -68,19 +67,17 @@ readonly PROFILE PROFILE_PATH TEMPLATE_VMID REBUILD REPO_ROOT
 # shellcheck source=scripts/profile-vars.sh
 . "$REPO_ROOT/scripts/profile-vars.sh"
 
-mapfile -t dump < <(profile_load "$PROFILE_PATH" "$REPO_ROOT/scripts/profile-vars.sh")
+mapfile -t dump < <(profile_load "$PROFILE_PATH")
 # One line per declared field. Fewer means the profile stopped early or a value
 # carried a newline, in which case the remainder would read as another field.
 [ "${#dump[@]}" -eq "$(profile_declared_count)" ] ||
   die "profile $PROFILE did not load cleanly (a syntax error, an early exit, or a value containing a newline)"
 
+profile_validate dump || die "profile $PROFILE is not usable (see above)"
+
 declare -A PV=()
 for line in "${dump[@]}"; do
   PV["${line%%=*}"]="${line#*=}"
-done
-
-for var in $PROFILE_REQUIRED_VARS; do
-  [ -n "${PV[$var]:-}" ] || die "profile $PROFILE does not set $var"
 done
 
 OS_FAMILY="${PV[OS_FAMILY]}"
@@ -93,25 +90,12 @@ SUDO_GROUP="${PV[SUDO_GROUP]}"
 CPU_TYPE="${PV[CPU_TYPE]}"
 SSHD_DROPIN_REMOVE="${PV[SSHD_DROPIN_REMOVE]:-}"
 CHECKSUM_FORMAT="${PV[CHECKSUM_FORMAT]:-gnu}"
-TEMPLATE_NAME="${TEMPLATE_NAME:-${PV[TEMPLATE_NAME]}}"
+TEMPLATE_NAME="${PV[TEMPLATE_NAME]}"
 
 # virt-customize takes one comma-separated list. A profile written with spaces
 # would otherwise become a single package name that no distribution has.
 GUEST_PACKAGES=$(printf '%s' "${PV[GUEST_PACKAGES]}" | tr -s '[:space:],' ',' | sed 's/^,//; s/,$//')
 [ -n "$GUEST_PACKAGES" ] || die "profile $PROFILE has an empty GUEST_PACKAGES"
-
-# Every value that reaches a generated file. The manifest is JSON, where a quote
-# or a backslash produces a file that parses as nothing and a control character
-# is illegal outright; the rest land in guest configuration. TEMPLATE_NAME is
-# checked here rather than with the profile because it may come from the
-# environment, which the profile loader never sees.
-for var in OS_FAMILY OS_VERSION TEMPLATE_NAME IMAGE_URL CHECKSUM_URL CHECKSUM_ALGO \
-           CIUSER SUDO_GROUP CPU_TYPE GUEST_PACKAGES SSHD_DROPIN_REMOVE; do
-  case "${!var}" in
-    *'"'*|*\\*) die "$var contains a quote or backslash: ${!var}" ;;
-    *[!\ -~]*) die "$var contains a control or non-ASCII character" ;;
-  esac
-done
 
 STORAGE="${STORAGE:-local-lvm}"
 BRIDGE="${BRIDGE:-vmbr2}"
@@ -121,11 +105,6 @@ IMAGE_CACHE_DIR="${IMAGE_CACHE_DIR:-/var/cache/pickle-image-builder}"
 IMAGE_FILE="${IMAGE_URL##*/}"
 [ -n "$IMAGE_FILE" ] || die "IMAGE_URL does not end in a file name: $IMAGE_URL"
 IMAGE_PATH="${IMAGE_CACHE_DIR}/${IMAGE_FILE}"
-# The algorithm names a command, so it stays a bare word: anything else would let
-# a profile field decide which binary hashes the image.
-case "$CHECKSUM_ALGO" in
-  *[!a-z0-9]*|'') die "CHECKSUM_ALGO must be a bare name such as sha256: $CHECKSUM_ALGO" ;;
-esac
 SUM_CMD="${CHECKSUM_ALGO}sum"
 
 command -v qm >/dev/null || die "qm not found; run this on a Proxmox node"
@@ -147,14 +126,20 @@ flock -n 9 || die "another build is running"
 # answering "already exists, nothing to do" with status 0 would let automation
 # clone it into VMs with no disk and no cloud-init drive.
 if qm status "$TEMPLATE_VMID" >/dev/null 2>&1; then
-  if qm config "$TEMPLATE_VMID" | grep -q '^template: 1'; then
-    [ "$REBUILD" -eq 1 ] || {
+  if [ "$REBUILD" -eq 0 ]; then
+    if qm config "$TEMPLATE_VMID" | grep -q '^template: 1'; then
       echo "VMID $TEMPLATE_VMID is already a template; use --rebuild to replace. Nothing to do."
       exit 0
-    }
-  elif [ "$REBUILD" -eq 0 ]; then
+    fi
     die "VMID $TEMPLATE_VMID exists but is not a template (leftover from a failed build?); inspect it, then re-run with --rebuild"
   fi
+  # --rebuild replaces this profile's own template, or the wreck of a run that
+  # named the guest but never templated it. A template built from another profile
+  # carries another name, and mistyping one vmid for another is likelier than
+  # anything the template flag distinguishes. Checked here so the collision is
+  # reported before a download rather than after it.
+  qm config "$TEMPLATE_VMID" | grep -qxF "name: $TEMPLATE_NAME" ||
+    die "VMID $TEMPLATE_VMID holds a guest named something other than $TEMPLATE_NAME; inspect it before rebuilding"
 fi
 
 command -v virt-customize >/dev/null || {
@@ -195,7 +180,8 @@ case "$CHECKSUM_FORMAT" in
   bsd)
     # "<ALGO> (<name>) = <hash>", which the Red Hat family publishes.
     expected=$(curl -fsSL "$CHECKSUM_URL" \
-      | awk -v f="$IMAGE_FILE" 'NF == 4 && $2 == "(" f ")" && $3 == "=" {print $4}') ;;
+      | awk -v f="$IMAGE_FILE" -v a="$CHECKSUM_ALGO" \
+          'NF == 4 && tolower($1) == tolower(a) && $2 == "(" f ")" && $3 == "=" {print $4}') ;;
   *) die "CHECKSUM_FORMAT must be gnu or bsd: $CHECKSUM_FORMAT" ;;
 esac
 [ -n "$expected" ] || die "no $CHECKSUM_ALGO entry for $IMAGE_FILE in $CHECKSUM_URL"
@@ -204,6 +190,7 @@ case "$expected" in
   *[!0-9a-fA-F]*|'') die "checksum for $IMAGE_FILE is not a hash: $expected" ;;
 esac
 
+expected=$(printf '%s' "$expected" | tr 'A-F' 'a-f')
 cached=""
 if [ -f "$IMAGE_PATH" ]; then
   cached=$("$SUM_CMD" "$IMAGE_PATH" | awk '{print $1}')
@@ -234,13 +221,17 @@ cp -f "$IMAGE_PATH" "$WORK_IMG"
 # it in the guest and the stored value is then no longer the truth. Which VMs
 # accept a password is decided at the gateway, and reachability on the paths that
 # skip the gateway belongs to the network rules, not to every guest image.
+# The one value in the drop-in that no distribution default matches, which is
+# what lets the build use it as evidence that the file was read at all.
+SSHD_MAX_AUTH_TRIES=3
+
 SSHD_CONF="$(mktemp)"
 {
-  cat <<'CONF'
+  cat <<CONF
 # Managed by the image builder. Numbered 01 so distribution drop-ins cannot win.
 PasswordAuthentication yes
 PermitRootLogin prohibit-password
-MaxAuthTries 3
+MaxAuthTries ${SSHD_MAX_AUTH_TRIES}
 LoginGraceTime 30
 MaxStartups 10:30:60
 ClientAliveInterval 60
@@ -343,26 +334,25 @@ virt-customize -a "$WORK_IMG" "${customize[@]}"
 # resolve a configuration without a host key, so the same pass makes a throwaway
 # set, asks its questions, and then leaves the image with none.
 # shellcheck disable=SC2016  # the command runs in the guest, not here
-virt-customize -a "$WORK_IMG" --run-command \
-  'mkdir -p /run/sshd && ssh-keygen -A >/dev/null &&
-   sshd -T | grep -qx "maxauthtries 3" &&
-   sshd -T | grep -qx "passwordauthentication yes" &&
-   rm -f /etc/ssh/ssh_host_* &&
-   test -z "$(find /etc/ssh -maxdepth 1 -name "ssh_host_*" -print -quit)"'
+virt-customize -a "$WORK_IMG" --run-command "
+   mkdir -p /run/sshd && ssh-keygen -A >/dev/null
+   getent group $(printf '%q' "$SUDO_GROUP") >/dev/null ||
+     { echo 'sudo group $SUDO_GROUP does not exist in this image' >&2; exit 1; }
+   sshd -T | grep -qx 'maxauthtries ${SSHD_MAX_AUTH_TRIES}' ||
+     { echo 'the sshd drop-in did not take effect' >&2; exit 1; }
+   rm -f /etc/ssh/ssh_host_*
+   test -z \"\$(find /etc/ssh -maxdepth 1 -name 'ssh_host_*' -print -quit)\" ||
+     { echo 'host keys survived removal' >&2; exit 1; }"
 
 # -------------------------------------------------------------------- build --
 # From here on a failure can leave a half-built VMID, which the guard above
 # turns into a loud error on the next run rather than a silent success.
 if [ "$REBUILD" -eq 1 ] && qm status "$TEMPLATE_VMID" >/dev/null 2>&1; then
-  # The check above ran before a download, an image copy and two customization
-  # passes: minutes in which a guest could appear at this id, and --purge does
-  # not come back. What may be destroyed is a template, or the wreck of a run
-  # that got as far as naming the VM but not as far as templating it. Anything
-  # else is somebody's guest.
-  if ! qm config "$TEMPLATE_VMID" | grep -q '^template: 1' &&
-     ! qm config "$TEMPLATE_VMID" | grep -qxF "name: $TEMPLATE_NAME"; then
-    die "VMID $TEMPLATE_VMID holds a guest that is neither a template nor a leftover of this build; inspect it before rebuilding"
-  fi
+  # Asked again: the check above ran before a download, an image copy and two
+  # customization passes, minutes in which a guest could appear at this id, and
+  # --purge does not come back.
+  qm config "$TEMPLATE_VMID" | grep -qxF "name: $TEMPLATE_NAME" ||
+    die "VMID $TEMPLATE_VMID now holds a guest named something other than $TEMPLATE_NAME; inspect it before rebuilding"
   echo "removing existing VMID $TEMPLATE_VMID for rebuild"
   qm destroy "$TEMPLATE_VMID" --purge
 fi

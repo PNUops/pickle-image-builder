@@ -25,21 +25,16 @@ profile_fail=0
 for profile in profiles/*.sh; do
   [ -e "$profile" ] || continue
 
-  mapfile -t fields < <(profile_load "$profile" scripts/profile-vars.sh)
+  mapfile -t fields < <(profile_load "$profile")
   if [ "${#fields[@]}" -ne "$(profile_declared_count)" ]; then
     echo "verify: $profile did not load cleanly (an early exit, or a value containing a newline)" >&2
     profile_fail=1
     continue
   fi
-  for field in "${fields[@]}"; do
-    case " $PROFILE_REQUIRED_VARS " in
-      *" ${field%%=*} "*)
-        [ -n "${field#*=}" ] || {
-          echo "verify: $profile leaves ${field%%=*} unset" >&2
-          profile_fail=1
-        } ;;
-    esac
-  done
+  if ! problems=$(profile_validate fields); then
+    printf 'verify: %s %s\n' "$profile" "$problems" >&2
+    profile_fail=1
+  fi
 
   if grep -nE "^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?(${reserved_alt})=" "$profile"; then
     echo "verify: $profile assigns a name that belongs to the builder (above)" >&2

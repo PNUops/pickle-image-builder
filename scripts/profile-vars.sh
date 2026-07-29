@@ -10,7 +10,7 @@
 # only these names are carried back. Nothing a profile assigns can reach the
 # builder's own variables.
 PROFILE_REQUIRED_VARS="OS_FAMILY OS_VERSION TEMPLATE_NAME IMAGE_URL CHECKSUM_URL CHECKSUM_ALGO CIUSER SUDO_GROUP CPU_TYPE GUEST_PACKAGES"
-PROFILE_OPTIONAL_VARS="SSHD_DROPIN_REMOVE CHECKSUM_FORMAT"
+PROFILE_OPTIONAL_VARS="SSHD_DROPIN_REMOVE CHECKSUM_FORMAT GUEST_COMMAND"
 
 # Names the builder decides. A profile setting one of these is a mistake worth
 # failing on even though the subshell already makes it harmless: it means the

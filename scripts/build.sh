@@ -90,6 +90,7 @@ SUDO_GROUP="${PV[SUDO_GROUP]}"
 CPU_TYPE="${PV[CPU_TYPE]}"
 SSHD_DROPIN_REMOVE="${PV[SSHD_DROPIN_REMOVE]:-}"
 CHECKSUM_FORMAT="${PV[CHECKSUM_FORMAT]:-gnu}"
+GUEST_COMMAND="${PV[GUEST_COMMAND]:-}"
 TEMPLATE_NAME="${PV[TEMPLATE_NAME]}"
 
 # virt-customize takes one comma-separated list. A profile written with spaces
@@ -166,6 +167,7 @@ NEEDRESTART_CONF=""
 MANIFEST_BODY=""
 MOTD_SCRIPT=""
 ISSUE_TEXT=""
+INSTALL_SCRIPT=""
 APT_TIMER_CONF=""
 cleanup() {
   rm -f "$WORK_IMG" \
@@ -182,7 +184,8 @@ cleanup() {
     ${APT_TIMER_CONF:+"$APT_TIMER_CONF"} \
     ${MANIFEST_BODY:+"$MANIFEST_BODY"} \
     ${MOTD_SCRIPT:+"$MOTD_SCRIPT"} \
-    ${ISSUE_TEXT:+"$ISSUE_TEXT"}
+    ${ISSUE_TEXT:+"$ISSUE_TEXT"} \
+    ${INSTALL_SCRIPT:+"$INSTALL_SCRIPT"}
 }
 trap cleanup EXIT
 
@@ -294,6 +297,14 @@ customize=(
   # git prints a paragraph about the default branch name on every init otherwise.
   --run-command "command -v git >/dev/null && git config --system init.defaultBranch main; true"
 )
+# A distribution can need something no field describes. The Red Hat family ships
+# its guest agent with the file and exec calls refused, and the platform reads
+# each VM's SSH host keys through exactly those, so a template built without
+# lifting that produces VMs the provisioner cannot finish. The value is ordinary
+# printable text like every other field and runs inside the image, never here.
+if [ -n "$GUEST_COMMAND" ]; then
+  customize+=(--run-command "$GUEST_COMMAND")
+fi
 if [ -n "$SSHD_DROPIN_REMOVE" ]; then
   # Quoted for the guest shell: the value reaches a command line inside the image.
   customize+=(--run-command "rm -f $(printf '%q' "$SSHD_DROPIN_REMOVE")")
@@ -443,41 +454,82 @@ cat > "$CLOUDCFG_CONF" <<'CLOUDCFG'
 datasource_list: [ NoCloud, ConfigDrive, None ]
 CLOUDCFG
 
+# Everything generated above goes into the image in one place, and a script
+# inside the guest puts each piece where that distribution keeps it. Uploading
+# straight to the final paths meant the recipe had to know each layout in
+# advance: the boot loader takes drop-ins on one family and only a single file
+# on the other, and a path belonging to a package manager the image does not
+# have is not somewhere to write at all.
+INSTALL_SCRIPT="$(mktemp)"
+cat > "$INSTALL_SCRIPT" <<'INSTALL'
+#!/bin/sh
+set -e
+cd /etc/pickle/staging
+
+put() { mkdir -p "$(dirname "$2")"; install -m "$3" "$1" "$2"; }
+
+put sshd.conf /etc/ssh/sshd_config.d/01-pickle.conf 644
+put sudoers /etc/sudoers.d/zz-pickle 440
+visudo -cf /etc/sudoers.d/zz-pickle
+
+# One family sources drop-ins after the file and ships its own settings in one,
+# so a plain append would lose to them. The other reads only the file.
+if [ -d /etc/default/grub.d ]; then
+  put grub.cfg /etc/default/grub.d/99-pickle.cfg 644
+else
+  cat grub.cfg >> /etc/default/grub
+fi
+
+put cloud-datasource.cfg /etc/cloud/cloud.cfg.d/99-pickle-datasource.cfg 644
+put sysctl.conf /etc/sysctl.d/99-pickle.conf 644
+put journald.conf /etc/systemd/journald.conf.d/99-pickle.conf 644
+put coredump.conf /etc/systemd/coredump.conf.d/99-pickle.conf 644
+put image.json /etc/pickle/image.json 644
+put issue /etc/issue 644
+put issue /etc/issue.net 644
+
+# Only where that package manager lives.
+[ -d /etc/apt/apt.conf.d ] && put apt.conf /etc/apt/apt.conf.d/99-pickle 644
+[ -d /etc/needrestart ] && put needrestart.conf /etc/needrestart/conf.d/99-pickle.conf 644
+for t in apt-daily apt-daily-upgrade; do
+  [ -f "/usr/lib/systemd/system/$t.timer" ] &&
+    put timer.conf "/etc/systemd/system/$t.timer.d/99-pickle.conf" 644
+done
+
+# One family runs scripts at login time; the other reads static text.
+if [ -d /etc/update-motd.d ]; then
+  put motd /etc/update-motd.d/00-pickle 755
+  chmod -x /etc/update-motd.d/*motd-news* /etc/update-motd.d/*landscape* \
+           /etc/update-motd.d/*esm* /etc/update-motd.d/*contract* \
+           /etc/update-motd.d/*release-upgrade* 2>/dev/null || true
+else
+  sh motd > /etc/motd.d-pickle-text 2>/dev/null || true
+  put /etc/motd.d-pickle-text /etc/motd.d/00-pickle 644
+  rm -f /etc/motd.d-pickle-text
+fi
+
+update-grub >/dev/null 2>&1 || grub2-mkconfig -o /boot/grub2/grub.cfg >/dev/null 2>&1
+cd /
+rm -rf /etc/pickle/staging
+INSTALL
+
 customize+=(
-  --mkdir /etc/ssh/sshd_config.d
-  --upload "${SSHD_CONF}:/etc/ssh/sshd_config.d/01-pickle.conf"
-  --run-command "chmod 644 /etc/ssh/sshd_config.d/01-pickle.conf"
-  --upload "${SUDOERS_CONF}:/etc/sudoers.d/zz-pickle"
-  --run-command "chmod 440 /etc/sudoers.d/zz-pickle && visudo -cf /etc/sudoers.d/zz-pickle"
-  --upload "${GRUB_CONF}:/etc/default/grub.d/99-pickle.cfg"
-  --upload "${CLOUDCFG_CONF}:/etc/cloud/cloud.cfg.d/99-pickle-datasource.cfg"
-  --mkdir /etc/systemd/journald.conf.d
-  --mkdir /etc/systemd/coredump.conf.d
-  --upload "${LIMITS_CONF}:/etc/sysctl.d/99-pickle.conf"
-  --upload "${JOURNALD_CONF}:/etc/systemd/journald.conf.d/99-pickle.conf"
-  --upload "${COREDUMP_CONF}:/etc/systemd/coredump.conf.d/99-pickle.conf"
-  --upload "${APT_CONF}:/etc/apt/apt.conf.d/99-pickle"
-  --mkdir /etc/pickle
-  --upload "${MANIFEST_BODY}:/etc/pickle/image.json"
-  --mkdir /etc/update-motd.d
-  --upload "${MOTD_SCRIPT}:/etc/update-motd.d/00-pickle"
-  --upload "${ISSUE_TEXT}:/etc/issue"
-  --upload "${ISSUE_TEXT}:/etc/issue.net"
-  # The distribution's own message of the day fetches news from the vendor on a
-  # timer, advertises a support subscription, and recomputes a system summary on
-  # every single login. None of that belongs on a student's VM.
-  --run-command "if [ -d /etc/update-motd.d ]; then chmod -x /etc/update-motd.d/*motd-news* /etc/update-motd.d/*landscape* /etc/update-motd.d/*esm* /etc/update-motd.d/*contract* /etc/update-motd.d/*release-upgrade* 2>/dev/null; fi; true"
-  --run-command "chmod 755 /etc/update-motd.d/00-pickle; chmod 644 /etc/issue /etc/issue.net /etc/pickle/image.json"
-  --mkdir /etc/needrestart/conf.d
-  --upload "${NEEDRESTART_CONF}:/etc/needrestart/conf.d/99-pickle.conf"
-  --mkdir /etc/systemd/system/apt-daily.timer.d
-  --mkdir /etc/systemd/system/apt-daily-upgrade.timer.d
-  --upload "${APT_TIMER_CONF}:/etc/systemd/system/apt-daily.timer.d/99-pickle.conf"
-  --upload "${APT_TIMER_CONF}:/etc/systemd/system/apt-daily-upgrade.timer.d/99-pickle.conf"
-  # Upload keeps the mode of the local file and mktemp makes them private, while
-  # everything written here is ordinary configuration any process may read.
-  --run-command "chmod 644 /etc/sysctl.d/99-pickle.conf /etc/systemd/journald.conf.d/99-pickle.conf /etc/systemd/coredump.conf.d/99-pickle.conf /etc/apt/apt.conf.d/99-pickle /etc/needrestart/conf.d/99-pickle.conf /etc/systemd/system/apt-daily.timer.d/99-pickle.conf /etc/systemd/system/apt-daily-upgrade.timer.d/99-pickle.conf /etc/default/grub.d/99-pickle.cfg /etc/cloud/cloud.cfg.d/99-pickle-datasource.cfg"
-  --run-command "update-grub 2>/dev/null || grub2-mkconfig -o /boot/grub2/grub.cfg"
+  --mkdir /etc/pickle/staging
+  --upload "${SSHD_CONF}:/etc/pickle/staging/sshd.conf"
+  --upload "${SUDOERS_CONF}:/etc/pickle/staging/sudoers"
+  --upload "${GRUB_CONF}:/etc/pickle/staging/grub.cfg"
+  --upload "${CLOUDCFG_CONF}:/etc/pickle/staging/cloud-datasource.cfg"
+  --upload "${LIMITS_CONF}:/etc/pickle/staging/sysctl.conf"
+  --upload "${JOURNALD_CONF}:/etc/pickle/staging/journald.conf"
+  --upload "${COREDUMP_CONF}:/etc/pickle/staging/coredump.conf"
+  --upload "${APT_CONF}:/etc/pickle/staging/apt.conf"
+  --upload "${NEEDRESTART_CONF}:/etc/pickle/staging/needrestart.conf"
+  --upload "${APT_TIMER_CONF}:/etc/pickle/staging/timer.conf"
+  --upload "${MANIFEST_BODY}:/etc/pickle/staging/image.json"
+  --upload "${MOTD_SCRIPT}:/etc/pickle/staging/motd"
+  --upload "${ISSUE_TEXT}:/etc/pickle/staging/issue"
+  --upload "${INSTALL_SCRIPT}:/etc/pickle/staging/install.sh"
+  --run-command "sh /etc/pickle/staging/install.sh"
   # Machine identity. Clones must not share one: systemd derives the journal id
   # and the default DHCP client id from it, and a duplicate makes two VMs look
   # like one wherever those are used. The systemd contract for an image is the
@@ -507,6 +559,18 @@ virt-customize -a "$WORK_IMG" "${customize[@]}"
 # resolve a configuration without a host key, so the same pass makes a throwaway
 # set, asks its questions, and then leaves the image with none.
 # shellcheck disable=SC2016  # the command runs in the guest, not here
+# Security labels, where the guest has them. Installing packages writes files
+# from outside the guest's own policy, so they arrive unlabelled, and a guest
+# that cannot execute its own dynamic loader starts no service at all. Letting
+# the guest relabel itself on first boot does not work either: the program that
+# would do the relabelling is one of the files it cannot execute. So it happens
+# here, after everything else has written.
+virt-customize -a "$WORK_IMG" --run-command \
+  'if [ -f /etc/selinux/config ] && command -v setfiles >/dev/null 2>&1; then
+     setfiles -F /etc/selinux/targeted/contexts/files/file_contexts / >/dev/null 2>&1 || true
+     rm -f /.autorelabel
+   fi'
+
 virt-customize -a "$WORK_IMG" --run-command "
    mkdir -p /run/sshd && ssh-keygen -A >/dev/null
    getent group $(printf '%q' "$SUDO_GROUP") >/dev/null ||

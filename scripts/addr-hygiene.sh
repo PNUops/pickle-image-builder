@@ -7,14 +7,20 @@
 # so every literal here has to be a documentation address or an unroutable
 # constant. Deployment values arrive as build variables instead.
 #
+# Scope: IPv4 literals. The guests this recipe builds run on an IPv4-only
+# network and the bridges carrying them have IPv6 disabled, so an IPv6 literal
+# would be a documentation example rather than a deployment address; a pattern
+# loose enough to catch one also catches clock times and diagram syntax.
+#
 # Usage: addr_hygiene_selftest
 #        addr_hygiene_check
 
 # Documentation ranges (RFC 5737) plus the constants that name no host.
 addr_hygiene_allowed() {
   case "$1" in
-    192.0.2.*|198.51.100.*|203.0.113.*) return 0 ;;
-    0.0.0.0|127.0.0.1|255.255.255.255) return 0 ;;
+    192.0.2.*|198.51.100.*|203.0.113.*) return 0 ;;   # RFC 5737 documentation
+    127.*|169.254.*) return 0 ;;                      # loopback, link-local
+    0.0.0.0|255.255.255.255) return 0 ;;
   esac
   return 1
 }
@@ -37,6 +43,19 @@ addr_hygiene_check() {
   if [ "${#files[@]}" -eq 0 ]; then
     echo "addr-hygiene: no files to scan — is this a git worktree?" >&2
     return 1
+  fi
+
+  # A file grep cannot read produces silence rather than a warning, which is the
+  # same shape as a clean scan. Refuse it instead.
+  local binary textlist
+  textlist="$(mktemp)"
+  printf '%s\0' "${files[@]}" | xargs -0 grep -lI '' 2>/dev/null | sort > "$textlist"
+  binary=$(printf '%s\n' "${files[@]}" | sort | comm -23 - "$textlist")
+  rm -f "$textlist"
+  if [ -n "$binary" ]; then
+    echo "addr-hygiene: file the scan cannot read:" >&2
+    echo "$binary" >&2
+    rc=1
   fi
 
   while IFS= read -r hit; do
@@ -84,7 +103,8 @@ SAMPLES
   # the gate becomes something people work around.
   cat > "$tmp/sample.txt" <<'CLEAN'
 example target 192.0.2.23 and 198.51.100.7 and 203.0.113.99
-bind 0.0.0.0 or loopback 127.0.0.1, mask 255.255.255.255
+bind 0.0.0.0 or loopback 127.0.0.1 or the resolver stub 127.0.0.53
+the hosts convention 127.0.1.1, link-local 169.254.169.254, mask 255.255.255.255
 libguestfs 1.54.1 and contract v0.27.0 are not addresses
 CLEAN
   git -C "$tmp" add -A >/dev/null 2>&1

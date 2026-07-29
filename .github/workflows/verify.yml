@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
 
+# The job runs shell that arrives with the pull request: profiles are sourced
+# by the gate. Read access is all it needs.
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-latest

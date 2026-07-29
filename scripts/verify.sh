@@ -14,10 +14,10 @@ mapfile -d '' -t scripts < "$listing"
 shellcheck "${scripts[@]}"
 
 # Profiles are executable shell that the builder runs as root on a hypervisor.
-# The builder only ever loads them in an empty-environment subshell, and this
-# gate loads them the same way: testing the value a profile actually produces,
-# rather than grepping for an assignment. A grep passes an empty value, an
-# assignment inside a branch that never runs, and fails an exported one.
+# This gate loads them exactly the way the build does, through the same function,
+# so that a green check means the build will get the same values. Grepping for an
+# assignment would pass an empty value and an assignment inside a branch that
+# never runs, and fail an exported one.
 # shellcheck source=scripts/profile-vars.sh
 . scripts/profile-vars.sh
 reserved_alt=$(printf '%s' "$PROFILE_RESERVED_VARS" | tr ' ' '|')
@@ -25,23 +25,21 @@ profile_fail=0
 for profile in profiles/*.sh; do
   [ -e "$profile" ] || continue
 
-  # shellcheck disable=SC2016  # the body runs in the child, not here
-  missing=$(env -i PATH=/usr/bin:/bin bash --noprofile --norc -c '
-    set -euo pipefail
-    . "$1"
-    . "$2"
-    for v in $PROFILE_REQUIRED_VARS; do
-      [ -n "${!v-}" ] || printf "%s " "$v"
-    done
-  ' _ "$profile" scripts/profile-vars.sh) || {
-    echo "verify: $profile failed to load" >&2
+  mapfile -t fields < <(profile_load "$profile" scripts/profile-vars.sh)
+  if [ "${#fields[@]}" -ne "$(profile_declared_count)" ]; then
+    echo "verify: $profile did not load cleanly (an early exit, or a value containing a newline)" >&2
     profile_fail=1
     continue
-  }
-  if [ -n "$missing" ]; then
-    echo "verify: $profile leaves these unset: $missing" >&2
-    profile_fail=1
   fi
+  for field in "${fields[@]}"; do
+    case " $PROFILE_REQUIRED_VARS " in
+      *" ${field%%=*} "*)
+        [ -n "${field#*=}" ] || {
+          echo "verify: $profile leaves ${field%%=*} unset" >&2
+          profile_fail=1
+        } ;;
+    esac
+  done
 
   if grep -nE "^[[:space:]]*(export[[:space:]]+|readonly[[:space:]]+)?(${reserved_alt})=" "$profile"; then
     echo "verify: $profile assigns a name that belongs to the builder (above)" >&2

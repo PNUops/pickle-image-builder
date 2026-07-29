@@ -65,34 +65,14 @@ fi
 readonly PROFILE PROFILE_PATH TEMPLATE_VMID REBUILD REPO_ROOT
 
 # ------------------------------------------------------------------ profile --
-# A profile is read, never sourced here. It is shell, so sourcing it would let a
-# stray assignment reach this script's own variables: the vmid band check and
-# the rebuild flag both live in ordinary variables, and a profile carrying a
-# leftover TEMPLATE_VMID would redirect the destroy below to whatever it names.
-# The subshell starts from an empty environment so that a value missing from the
-# profile is reported as missing instead of silently inherited from the caller.
-profile_dump() {
-  # shellcheck disable=SC2016  # the body runs in the child, not here
-  env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin bash --noprofile --norc -c '
-    set -euo pipefail
-    . "$1"
-    . "$2"
-    for v in $PROFILE_REQUIRED_VARS $PROFILE_OPTIONAL_VARS; do
-      printf "%s=%s\n" "$v" "${!v-}"
-    done
-  ' _ "$PROFILE_PATH" "$REPO_ROOT/scripts/profile-vars.sh"
-}
-
 # shellcheck source=scripts/profile-vars.sh
 . "$REPO_ROOT/scripts/profile-vars.sh"
 
-# The variable list is loaded after the profile inside the subshell too, so a
-# profile cannot shrink it to hide a field it failed to set.
-mapfile -t dump < <(profile_dump)
-# One line per declared field. A value carrying a newline would otherwise be
-# truncated at it and the remainder read as another field's assignment.
-declared=$(printf '%s %s' "$PROFILE_REQUIRED_VARS" "$PROFILE_OPTIONAL_VARS" | wc -w)
-[ "${#dump[@]}" -eq "$declared" ] || die "profile $PROFILE did not load cleanly (a syntax error, or a value containing a newline)"
+mapfile -t dump < <(profile_load "$PROFILE_PATH" "$REPO_ROOT/scripts/profile-vars.sh")
+# One line per declared field. Fewer means the profile stopped early or a value
+# carried a newline, in which case the remainder would read as another field.
+[ "${#dump[@]}" -eq "$(profile_declared_count)" ] ||
+  die "profile $PROFILE did not load cleanly (a syntax error, an early exit, or a value containing a newline)"
 
 declare -A PV=()
 for line in "${dump[@]}"; do

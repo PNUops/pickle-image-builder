@@ -1,0 +1,17 @@
+{
+  "profile": "debian-12",
+  "osFamily": "debian",
+  "osVersion": "12",
+  "templateVmid": 1005,
+  "templateName": "debian-12-template",
+  "imageUrl": "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2",
+  "imageChecksum": "5f4f2e1a242447a5e5c48cdc7c6bdfe7b44ffd1a58836ddea8cf6140a65dd702d9d67462cd6941dfd5f0efd0be1db840c2a6ffa82c24b913878be4c8ee7a6eee",
+  "checksumUrl": "https://cloud.debian.org/images/cloud/bookworm/latest/SHA512SUMS",
+  "checksumAlgorithm": "sha512",
+  "cpuType": "x86-64-v2-AES",
+  "ciUser": "debian",
+  "sudoGroup": "sudo",
+  "guestPackages": "qemu-guest-agent,git,vim,nano,tmux,less,htop,ncdu,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute2,traceroute,netcat-openbsd,logrotate,ca-certificates,dnsutils",
+  "recipeRevision": "535f956",
+  "builtAt": "2026-07-29T15:04:40Z"
+}

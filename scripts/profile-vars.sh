@@ -10,7 +10,7 @@
 # only these names are carried back. Nothing a profile assigns can reach the
 # builder's own variables.
 PROFILE_REQUIRED_VARS="OS_FAMILY OS_VERSION TEMPLATE_NAME IMAGE_URL CHECKSUM_URL CHECKSUM_ALGO CIUSER SUDO_GROUP CPU_TYPE GUEST_PACKAGES"
-PROFILE_OPTIONAL_VARS="SSHD_DROPIN_REMOVE CHECKSUM_FORMAT GUEST_COMMAND"
+PROFILE_OPTIONAL_VARS="SSHD_DROPIN_REMOVE CHECKSUM_FORMAT GUEST_COMMAND TMP_ON_DISK"
 
 # Names the builder decides. A profile setting one of these is a mistake worth
 # failing on even though the subshell already makes it harmless: it means the
@@ -82,6 +82,13 @@ profile_validate() {
   case "${got[CHECKSUM_FORMAT]-gnu}" in
     ''|gnu|bsd) : ;;
     *) echo "CHECKSUM_FORMAT must be gnu or bsd"; rc=1 ;;
+  esac
+  # Spelled out rather than read for truthiness: a profile writing "true" or "1"
+  # would otherwise read as off, and the guest keeping its tmpfs is invisible
+  # until a student runs out of memory on a machine whose disk is empty.
+  case "${got[TMP_ON_DISK]-}" in
+    ''|yes|no) : ;;
+    *) echo "TMP_ON_DISK must be yes or no"; rc=1 ;;
   esac
   return "$rc"
 }

@@ -179,7 +179,14 @@ command -v virt-customize >/dev/null || {
 mkdir -p "$IMAGE_CACHE_DIR"
 WORK_IMG="${IMAGE_CACHE_DIR}/pickle-${TEMPLATE_VMID}-${IMAGE_FILE}"
 DOWNLOAD_TMP=""
-cleanup() { rm -f "$WORK_IMG" ${DOWNLOAD_TMP:+"$DOWNLOAD_TMP"}; }
+SSHD_CONF=""
+SUDOERS_CONF=""
+cleanup() {
+  rm -f "$WORK_IMG" \
+    ${DOWNLOAD_TMP:+"$DOWNLOAD_TMP"} \
+    ${SSHD_CONF:+"$SSHD_CONF"} \
+    ${SUDOERS_CONF:+"$SUDOERS_CONF"}
+}
 trap cleanup EXIT
 
 # The upstream checksum is compared against the cached image on every build, not
@@ -215,13 +222,45 @@ fi
 # copy named for this build so two runs cannot collide.
 cp -f "$IMAGE_PATH" "$WORK_IMG"
 
+# sshd drop-in. It sorts first on purpose: sshd keeps the FIRST value it obtains
+# for a keyword, and distributions ship their own drop-ins at 50 and 60, so a
+# higher number loses to them.
+#
+# Password authentication stays on. The platform forwards the password a user
+# typed to the guest rather than substituting a key, because a user may change
+# it in the guest and the stored value is then no longer the truth. Which VMs
+# accept a password is decided at the gateway, and reachability on the paths that
+# skip the gateway belongs to the network rules, not to every guest image.
+SSHD_CONF="$(mktemp)"
+{
+  cat <<'CONF'
+# Managed by the image builder. Numbered 01 so distribution drop-ins cannot win.
+PasswordAuthentication yes
+PermitRootLogin prohibit-password
+MaxAuthTries 3
+LoginGraceTime 30
+MaxStartups 10:30:60
+ClientAliveInterval 60
+ClientAliveCountMax 5
+X11Forwarding no
+UseDNS no
+CONF
+} > "$SSHD_CONF"
+
 # sudoers: cloud-init writes /etc/sudoers.d/90-cloud-init-users granting the
 # default user NOPASSWD. Sudo must demand the password instead, because the VM
 # password is the sudo credential. Sudo reads /etc/sudoers.d in C-locale lexical
-# order and the LAST matching rule wins, so 99-pickle sorts after
-# 90-cloud-init-users and overrides it. visudo -cf validates the drop-in here; a
-# syntax error would otherwise surface only as a broken sudo on every VM built
-# from the template. 0440 is the mode sudo requires.
+# order and the LAST matching rule wins, the opposite of sshd, so the name sorts
+# to the end where no later cloud-init drop-in can tie with it. visudo -cf
+# validates the file here, since a syntax error would otherwise surface only as a
+# broken sudo on every VM built from the template. 0440 is the mode sudo requires.
+SUDOERS_CONF="$(mktemp)"
+cat > "$SUDOERS_CONF" <<SUDO
+${CIUSER} ALL=(ALL:ALL) PASSWD:ALL
+Defaults passwd_tries=3
+Defaults timestamp_timeout=5
+SUDO
+
 customize=(
   --install "$GUEST_PACKAGES"
   --timezone Asia/Seoul
@@ -231,12 +270,31 @@ if [ -n "$SSHD_DROPIN_REMOVE" ]; then
   customize+=(--run-command "rm -f $(printf '%q' "$SSHD_DROPIN_REMOVE")")
 fi
 customize+=(
-  --write "/etc/ssh/sshd_config.d/55-pickle.conf:PasswordAuthentication yes"
-  --write "/etc/sudoers.d/99-pickle:${CIUSER} ALL=(ALL:ALL) PASSWD:ALL"
-  --run-command "chmod 440 /etc/sudoers.d/99-pickle && visudo -cf /etc/sudoers.d/99-pickle"
+  --upload "${SSHD_CONF}:/etc/ssh/sshd_config.d/01-pickle.conf"
+  --run-command "chmod 644 /etc/ssh/sshd_config.d/01-pickle.conf"
+  --upload "${SUDOERS_CONF}:/etc/sudoers.d/zz-pickle"
+  --run-command "chmod 440 /etc/sudoers.d/zz-pickle && visudo -cf /etc/sudoers.d/zz-pickle"
   --truncate /etc/machine-id
 )
 virt-customize -a "$WORK_IMG" "${customize[@]}"
+
+# A separate pass, so the order is the shell's rather than virt-customize's,
+# which does not document one across option kinds.
+#
+# A template must carry no host keys. Every clone would share them, and because
+# the platform pins the key it collects from each VM, a shared key would look
+# healthy while protecting nothing between the gateway and the guests. Cloud
+# images ship without them and cloud-init generates them on first boot; what this
+# guards against is a package installed above putting them back, so they are
+# removed last and the removal is checked rather than assumed.
+#
+# Generating a throwaway set first is what makes the sshd drop-in testable: sshd
+# refuses to check a configuration when no host key exists, so one command
+# validates the file and then leaves the image with none.
+# shellcheck disable=SC2016  # the command runs in the guest, not here
+virt-customize -a "$WORK_IMG" --run-command \
+  'mkdir -p /run/sshd && ssh-keygen -A >/dev/null && sshd -t && rm -f /etc/ssh/ssh_host_* &&
+   test -z "$(find /etc/ssh -maxdepth 1 -name "ssh_host_*" -print -quit)"'
 
 # -------------------------------------------------------------------- build --
 # From here on a failure can leave a half-built VMID, which the guard above

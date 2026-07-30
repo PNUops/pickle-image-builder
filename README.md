@@ -2,7 +2,7 @@
 
 부산대학교 클라우드 플랫폼(Pickle)의 사용자 VM OS 이미지를 만드는 빌드 레시피입니다.
 
-사용자 VM은 Proxmox 템플릿을 전체 복제해 만듭니다. 이 저장소는 그 템플릿의 재료를
+사용자 VM은 Proxmox 템플릿을 전체 복제해 만듭니다. 이 레포지토리는 그 템플릿의 재료를
 담습니다. 업스트림 클라우드 이미지에 무엇을 더하고 무엇을 덜어낼지, 배포판마다 무엇이
 다른지가 여기에 있습니다. 빌드는 운영자가 하이퍼바이저 호스트에서 실행하고, 만들어진
 템플릿은 플랫폼의 OS 카탈로그가 가리킵니다.
@@ -97,7 +97,7 @@ scripts/build.sh <프로파일> <vmid> --rebuild   # 기존 VMID를 지우고 �
 지웁니다. 담기는 값은 업스트림 이미지 주소와 체크섬, 설치한 패키지, 레시피 리비전,
 빌드 시각입니다. 작업 트리에 커밋하지 않은 변경이 있으면 리비전 뒤에 표시가 붙습니다.
 
-`verify.sh`는 커밋 전마다 실행합니다. 셸 린트에 더해 공개 저장소 규칙을 검사하고,
+`verify.sh`는 커밋 전마다 실행합니다. 셸 린트에 더해 공개 레포지토리 규칙을 검사하고,
 프로파일을 빌더와 똑같은 방식으로 읽어 같은 규칙으로 검사하고, IPv4 주소 리터럴이
 문서화 대역(RFC 5737)이나 루프백처럼 어느 호스트도 가리키지 않는 값이 아니면
 실패합니다.
@@ -131,7 +131,7 @@ scripts/build.sh <프로파일> <vmid> --rebuild   # 기존 VMID를 지우고 �
 
 ## 전체 아키텍처
 
-<!-- arch:begin — 저장소 공통 블록입니다. 손으로 고치지 마세요. -->
+<!-- arch:begin — 레포지토리 공통 블록입니다. 손으로 고치지 마세요. -->
 ```mermaid
 flowchart LR
     subgraph ext [외부]
@@ -188,7 +188,7 @@ flowchart LR
     IB -.->|템플릿 빌드| PVE
 ```
 
-| 저장소 | 역할 |
+| 레포지토리 | 역할 |
 |---|---|
 | [pickle-api](https://github.com/PNUops/pickle-api) | REST API와 프로비저닝 워커 (Spring Boot 4, Java 25, PostgreSQL 18, JobRunr) |
 | [pickle-console](https://github.com/PNUops/pickle-console) | 사용자·관리자 웹 콘솔 (React 19, TypeScript) |

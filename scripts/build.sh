@@ -170,6 +170,7 @@ MOTD_SCRIPT=""
 ISSUE_TEXT=""
 INSTALL_SCRIPT=""
 APT_TIMER_CONF=""
+SUDOCHECK_SCRIPT=""
 cleanup() {
   rm -f "$WORK_IMG" \
     ${DOWNLOAD_TMP:+"$DOWNLOAD_TMP"} \
@@ -186,7 +187,8 @@ cleanup() {
     ${MANIFEST_BODY:+"$MANIFEST_BODY"} \
     ${MOTD_SCRIPT:+"$MOTD_SCRIPT"} \
     ${ISSUE_TEXT:+"$ISSUE_TEXT"} \
-    ${INSTALL_SCRIPT:+"$INSTALL_SCRIPT"}
+    ${INSTALL_SCRIPT:+"$INSTALL_SCRIPT"} \
+    ${SUDOCHECK_SCRIPT:+"$SUDOCHECK_SCRIPT"}
 }
 trap cleanup EXIT
 
@@ -277,12 +279,190 @@ CONF
 #
 # visudo -cf validates the file here, since a syntax error would otherwise
 # surface only as a broken sudo on every VM. 0440 is the mode sudo requires.
+# Syntax is all it validates, though, and every way this rule fails to bite
+# leaves it syntactically perfect, so the effectiveness check below is what
+# actually decides whether the image ships.
 SUDOERS_CONF="$(mktemp)"
 cat > "$SUDOERS_CONF" <<SUDO
 %${SUDO_GROUP} ALL=(ALL:ALL) PASSWD:ALL
 Defaults passwd_tries=3
 Defaults timestamp_timeout=5
 SUDO
+
+# Does that rule actually make sudo ask? Two ways it does not, both of which
+# leave every file well-formed and every check above green:
+#
+#   - cloud-init does not put the default user in this group, so the rule
+#     matches nobody and cloud-init's own passwordless rule stays the last match
+#   - the image carries a rule BELOW the include directive in /etc/sudoers. Sudo
+#     reads /etc/sudoers.d where the directive sits and the last match wins, so
+#     such a line beats every drop-in and sorting a name to the end is void on
+#     that distribution
+#
+# Neither fails anything. The VM boots, sudo works, and it never asks for the
+# password the console calls the sudo credential. So the image is put into the
+# state a booted clone reaches and sudo itself is asked.
+#
+# Asking sudo inside the build appliance is worth something only with a control.
+# Any environmental reason for sudo to fail -- a broken binary, a refused
+# syscall, no pty -- looks exactly like "a password was demanded", which is the
+# answer this check wants to hear, so a bare `sudo -n` would pass a giveaway
+# image. The check therefore first grants the same user a passwordless rule and
+# requires sudo to say yes to it. Only an environment that can say yes is
+# allowed to say no.
+SUDOCHECK_SCRIPT="$(mktemp)"
+cat > "$SUDOCHECK_SCRIPT" <<'SUDOCHECK'
+#!/bin/sh
+# Managed by the image builder. Runs inside the image, never on the host.
+u="$1"
+g="$2"
+
+DROPIN=/etc/sudoers.d/90-cloud-init-users
+CONTROL=/etc/sudoers.d/zzzz-pickle-sudo-check
+
+say() { echo "sudo check: $*" >&2; }
+
+# The interpreter that owns the cloud-init library, which is not always the one
+# called python3.
+ci_python() {
+  cip=$(command -v cloud-init 2>/dev/null) || cip=
+  if [ -n "$cip" ]; then
+    p=$(sed -n '1s/^#![[:space:]]*//p' "$cip" | awk '{print $1}')
+    if [ -n "$p" ] && [ -x "$p" ]; then echo "$p"; return 0; fi
+  fi
+  command -v python3 2>/dev/null
+}
+
+# Never as root: root has its own rule in every sudoers, so asking as root
+# answers nothing about the default user.
+as_user() {
+  setpriv --reuid="$uid" --regid="$gid" --init-groups --reset-env \
+    env LC_ALL=C PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    sudo -n true >/dev/null 2>&1
+}
+
+checks() (
+  set -e
+
+  py=$(ci_python)
+  [ -n "$py" ] || { say "the image has no python interpreter to read its cloud-init configuration with"; exit 1; }
+
+  # cloud-init's own merge of /etc/cloud/cloud.cfg and /etc/cloud/cloud.cfg.d,
+  # rather than a second implementation of that merge living here.
+  cfg=$("$py" - <<'PY'
+import sys
+from cloudinit import util
+c = util.read_conf_with_confd("/etc/cloud/cloud.cfg")
+d = (c.get("system_info") or {}).get("default_user") or {}
+if not d:
+    sys.exit("system_info.default_user is not set")
+groups = d.get("groups") or []
+if isinstance(groups, str):
+    groups = groups.replace(",", " ").split()
+rules = d.get("sudo") or []
+if isinstance(rules, str):
+    rules = [rules]
+print("NAME=%s" % (d.get("name") or ""))
+print("GROUPS=%s" % " ".join(str(x) for x in groups))
+for r in rules:
+    r = str(r).strip()
+    if r:
+        print("RULE=%s" % r)
+PY
+  ) || { say "could not read the image's cloud-init default-user configuration"; exit 1; }
+
+  name=$(printf '%s\n' "$cfg" | sed -n 's/^NAME=//p')
+  groups=$(printf '%s\n' "$cfg" | sed -n 's/^GROUPS=//p')
+  rules=$(printf '%s\n' "$cfg" | sed -n 's/^RULE=//p')
+
+  if [ "$name" != "$u" ]; then
+    say "the image's cloud-init default user is '$name', the profile names '$u'"
+    exit 1
+  fi
+  case " $groups " in
+    *" $g "*) ;;
+    *) say "cloud-init puts '$u' in [$groups], which does not include '$g': the sudoers rule matches nobody"
+       exit 1 ;;
+  esac
+  if id "$u" >/dev/null 2>&1; then
+    say "the image already carries a user named '$u', so there is none to create and test with"
+    exit 1
+  fi
+
+  # The state a booted clone reaches: the default user in the groups cloud-init
+  # gives it, and cloud-init's own passwordless rule where cloud-init writes it.
+  # Under the real account name, because a distribution's giveaway rule can name
+  # the account rather than a group and a stand-in name would walk past it.
+  add=
+  for grp in $groups; do
+    getent group "$grp" >/dev/null 2>&1 && add="${add:+$add,}$grp"
+  done
+  useradd -m -s /bin/sh ${add:+-G "$add"} "$u"
+  printf '%s\n' "$rules" | while IFS= read -r r; do
+    [ -n "$r" ] && printf '%s %s\n' "$u" "$r"
+  done > "$DROPIN"
+  chmod 440 "$DROPIN"
+
+  uid=$(id -u "$u")
+  gid=$(id -g "$u")
+
+  # The control. It sorts after everything the build wrote, so sudo answering
+  # "no password needed" to it proves this environment is able to say yes.
+  printf '%s ALL=(ALL:ALL) NOPASSWD:ALL\n' "$u" > "$CONTROL"
+  chmod 440 "$CONTROL"
+  if ! as_user; then
+    say "sudo refused even with a passwordless rule in place, so this check cannot judge the image"
+    exit 1
+  fi
+  rm -f "$CONTROL"
+
+  if as_user; then
+    say "'$u' obtains root with no password: the rule the build wrote is not the last match"
+    exit 1
+  fi
+  # Told apart from the case above by asking sudo what the user may do at all. A
+  # VM whose sudo refuses everyone is wrong in the other direction: the console
+  # names the VM password as the sudo credential.
+  if ! sudo -l -U "$u" >/dev/null 2>&1; then
+    say "'$u' may not run sudo at all"
+    exit 1
+  fi
+  exit 0
+)
+
+BK=$(mktemp -d)
+cp -a /etc/sudoers.d "$BK/sudoers.d"
+for f in passwd shadow group gshadow subuid subgid; do
+  [ -f "/etc/$f" ] && cp -a "/etc/$f" "$BK/$f"
+done
+
+rc=0
+checks || rc=1
+
+# The image ships without any of it. The account files go back verbatim rather
+# than being unwound command by command, because a half-removed account is the
+# same kind of silent defect this check exists to catch.
+userdel -r "$u" >/dev/null 2>&1
+rm -rf /etc/sudoers.d
+cp -a "$BK/sudoers.d" /etc/sudoers.d
+for f in passwd shadow group gshadow subuid subgid; do
+  [ -f "$BK/$f" ] && cp -a "$BK/$f" "/etc/$f"
+done
+rm -rf "$BK" "/home/$u" "/var/mail/$u" "/var/spool/mail/$u" \
+       /var/db/sudo/lectured /var/lib/sudo/ts /var/lib/sudo/lectured
+
+if id "$u" >/dev/null 2>&1; then
+  say "the check's own account '$u' survived cleanup"
+  rc=1
+fi
+for leftover in "$DROPIN" "$CONTROL" "/home/$u"; do
+  if [ -e "$leftover" ]; then
+    say "the check left $leftover behind"
+    rc=1
+  fi
+done
+exit "$rc"
+SUDOCHECK
 
 customize=(
   --install "$GUEST_PACKAGES"
@@ -539,6 +719,14 @@ customize+=(
   --run-command "printf 'uninitialized\\n' > /etc/machine-id &&
                  rm -f /var/lib/dbus/machine-id &&
                  rm -rf /var/lib/cloud/instance /var/lib/cloud/instances /var/lib/cloud/data"
+  # Last, so that everything able to write a sudoers rule -- the package install
+  # above included -- has already written. Still in this pass rather than a
+  # fourth one: the check creates an account and puts the files back afterwards,
+  # and the relabelling pass that follows repairs any security label that
+  # restoring a file cost.
+  --upload "${SUDOCHECK_SCRIPT}:/pickle-sudo-check.sh"
+  --run-command "sh /pickle-sudo-check.sh $(printf '%q' "$CIUSER") $(printf '%q' "$SUDO_GROUP")"
+  --delete /pickle-sudo-check.sh
 )
 
 # Where /tmp lives. A distribution that mounts it as a tmpfs sizes it from RAM,

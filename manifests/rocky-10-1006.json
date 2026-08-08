@@ -1,0 +1,17 @@
+{
+  "profile": "rocky-10",
+  "osFamily": "rocky",
+  "osVersion": "10",
+  "templateVmid": 1006,
+  "templateName": "rocky-10-template",
+  "imageUrl": "https://dl.rockylinux.org/pub/rocky/10/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2",
+  "imageChecksum": "9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48",
+  "checksumUrl": "https://dl.rockylinux.org/pub/rocky/10/images/x86_64/CHECKSUM",
+  "checksumAlgorithm": "sha256",
+  "cpuType": "x86-64-v3",
+  "ciUser": "rocky",
+  "sudoGroup": "wheel",
+  "guestPackages": "qemu-guest-agent,git,vim-enhanced,nano,tmux,less,jq,rsync,unzip,zip,curl,wget,bash-completion,file,tree,psmisc,lsof,iproute,traceroute,nmap-ncat,logrotate,ca-certificates,bind-utils,glibc-langpack-ko",
+  "recipeRevision": "be934d5",
+  "builtAt": "2026-08-08T17:38:39Z"
+}

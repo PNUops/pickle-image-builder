@@ -11,11 +11,17 @@ on:
 permissions:
   contents: read
 
+# A branch that gets three pushes in a minute ran three full jobs, and the two
+# that no longer describe anything were still occupying runners.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Run verification
         run: bash scripts/verify.sh

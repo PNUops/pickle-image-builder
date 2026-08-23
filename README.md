@@ -80,8 +80,7 @@
 ## 시작하기
 
 ```
-scripts/setup-hooks.sh    # 커밋 훅 설치 (클론 후 한 번)
-scripts/verify.sh         # shellcheck + 위생 검사 + 프로파일 검사
+scripts/verify.sh         # shellcheck + 주소 위생 + 프로파일 검사
 
 scripts/build.sh <프로파일> <vmid>             # 템플릿 빌드
 scripts/build.sh <프로파일> <vmid> --rebuild   # 기존 VMID를 지우고 다시 빌드

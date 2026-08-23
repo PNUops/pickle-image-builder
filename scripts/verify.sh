@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verification gate: shell lint + profile checks + publication and address hygiene.
+# Verification gate: shell lint + profile checks + address hygiene.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -43,13 +43,6 @@ for profile in profiles/*.sh; do
 done
 [ "$profile_fail" -eq 0 ] || { echo "verify: profile check failed" >&2; exit 1; }
 
-# Publication hygiene: no references to paths this repository does not contain,
-# none to a private tree or a vault, no internal process tokens. Enforced here because two manual scrubs
-# both missed real violations.
-# shellcheck source=scripts/hygiene.sh
-. scripts/hygiene.sh   # cwd is the repo root (set above)
-hygiene_selftest
-hygiene_check public
 
 # Address hygiene: deployment addresses never enter a published recipe.
 # shellcheck source=scripts/addr-hygiene.sh

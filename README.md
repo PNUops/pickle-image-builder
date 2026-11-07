@@ -7,7 +7,7 @@
 
 ## 동작 방식
 
-- **빌더 하나에 OS마다 프로파일 하나** — 배포판 차이는 코드 분기가 아니라
+- **빌더 하나에 OS마다 프로파일 하나**: 배포판 차이는 코드 분기가 아니라
   `profiles/`의 값으로 관리해요. 새 OS는 프로파일을 추가하고, 기존 항목으로 표현할 수
   없는 차이가 있으면 프로파일 형식과 빌더를 함께 확장해요.
 - **프로파일은 격리해 읽어요.** 프로파일은 셸 파일이고 빌더는 하이퍼바이저에서
@@ -120,6 +120,8 @@ scripts/build.sh <프로파일> <vmid> --rebuild   # 기존 VMID를 지우고 �
 ```sh
 curl -fsSL https://raw.githubusercontent.com/PNUops/pickle-image-builder/main/guest/pickle-diag.sh | bash
 ```
+
+최종 갱신: 2026-11-08
 
 ## 전체 아키텍처
 
